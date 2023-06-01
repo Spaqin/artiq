@@ -298,15 +298,11 @@ def main():
             programmer.write_binary(*config["storage"], storage_img)
         elif action == "firmware":
             firmware_fbis = []
-            for firmware in "satman", "runtime":
-                filename = artifact_path(binary_dir, "software", firmware, firmware + ".fbi")
-                if os.path.exists(filename):
-                    firmware_fbis.append(filename)
+            filename = artifact_path(binary_dir, "software", "runtime", "runtime.fbi")
+            if os.path.exists(filename):
+                firmware_fbis.append(filename)
             if not firmware_fbis:
                 raise FileNotFoundError("no firmware found")
-            if len(firmware_fbis) > 1:
-                raise ValueError("more than one firmware file, please clean up your build directory. "
-                   "Found firmware files: {}".format(" ".join(firmware_fbis)))
             programmer.write_binary(*config["firmware"], firmware_fbis[0])
         elif action == "load":
             gateware_bit = artifact_path(binary_dir, "gateware", "top.bit")
