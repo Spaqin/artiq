@@ -406,23 +406,27 @@ class MasterBase(MiniSoC, AMPSoC):
         self.drtio_qpll_channel, self.ethphy_qpll_channel = qpll.channels
 
 
-class SatelliteBase(BaseSoC):
+class SatelliteBase(MiniSoC):
     mem_map = {
         "drtioaux": 0x50000000,
     }
-    mem_map.update(BaseSoC.mem_map)
+    mem_map.update(MiniSoC.mem_map)
 
     def __init__(self, rtio_clk_freq=125e6, enable_sata=False, *, gateware_identifier_str=None, hw_rev="v2.0", **kwargs):
         if hw_rev in ("v1.0", "v1.1"):
             cpu_bus_width = 32
         else:
             cpu_bus_width = 64
-        BaseSoC.__init__(self,
+
+        MiniSoC.__init__(self,
                  cpu_type="vexriscv",
                  hw_rev=hw_rev,
                  cpu_bus_width=cpu_bus_width,
                  sdram_controller_type="minicon",
                  l2_size=128*1024,
+                 integrated_sram_size=8192,
+                 ethmac_nrxslots=4,
+                 ethmac_ntxslots=4,
                  clk_freq=rtio_clk_freq,
                  rtio_sys_merge=True,
                  **kwargs)
@@ -461,12 +465,12 @@ class SatelliteBase(BaseSoC):
         drtio_data_pads = []
         if enable_sata:
             drtio_data_pads.append(platform.request("sata"))
-        drtio_data_pads += [platform.request("sfp", i) for i in range(3)]
+        drtio_data_pads += [platform.request("sfp", i) for i in range(1, 3)]
         if self.platform.hw_rev == "v2.0":
             drtio_data_pads.append(platform.request("sfp", 3))
 
         if self.platform.hw_rev in ("v1.0", "v1.1"):
-            sfp_ctls = [platform.request("sfp_ctl", i) for i in range(3)]
+            sfp_ctls = [platform.request("sfp_ctl", i) for i in range(1, 3)]
             self.comb += [sc.tx_disable.eq(0) for sc in sfp_ctls]
         self.submodules.drtio_transceiver = gtp_7series.GTP(
             qpll_channel=qpll.channels[0],

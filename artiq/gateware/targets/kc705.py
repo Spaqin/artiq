@@ -314,11 +314,11 @@ class _MasterBase(MiniSoC, AMPSoC):
 
 
 
-class _SatelliteBase(BaseSoC):
+class _SatelliteBase(MiniSoC):
     mem_map = {
         "drtioaux":     0x50000000,
     }
-    mem_map.update(BaseSoC.mem_map)
+    mem_map.update(MiniSoC.mem_map)
 
     def __init__(self, gateware_identifier_str=None, sma_as_sat=False, drtio_100mhz=False, **kwargs):
         clk_freq = 100e6 if drtio_100mhz else 125e6
@@ -328,6 +328,8 @@ class _SatelliteBase(BaseSoC):
                  sdram_controller_type="minicon",
                  l2_size=128*1024,
                  integrated_sram_size=8192,
+                 ethmac_nrxslots=4,
+                 ethmac_ntxslots=4,
                  clk_freq=clk_freq,
                  rtio_sys_merge=True,
                  **kwargs)
