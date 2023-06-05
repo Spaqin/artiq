@@ -28,14 +28,6 @@ fn get_rtio_clock_cfg() -> RtioClock {
             Ok("ext0_synth0_80to125") => RtioClock::Ext0_Synth0_80to125,
             Ok("ext0_synth0_100to125") => RtioClock::Ext0_Synth0_100to125,
             Ok("ext0_synth0_125to125") => RtioClock::Ext0_Synth0_125to125,
-            Ok("i") => {
-                warn!("Using legacy rtio_clock setting ('i'). Falling back to default. This will be deprecated.");
-                RtioClock::Default
-            },
-            Ok("e") => {
-                warn!("Using legacy rtio_clock setting ('e'). This will be deprecated.");
-                RtioClock::Ext0_Bypass
-            },
             _ => {
                 warn!("rtio_clock setting not recognised. Falling back to default.");
                 RtioClock::Default
@@ -214,12 +206,17 @@ fn setup_si5324_pll(cfg: RtioClock) {
     si5324::setup(&si5324_settings, si5324_ref_input).expect("cannot initialize Si5324");
 }
 
-fn setup_si5324(clock_cfg: RtioClock) {
+fn setup_sysclk(clock_cfg: RtioClock) {
     let switched = unsafe {
         csr::crg::switch_done_read()
     };
     if switched == 1 {
         info!("Clocking has already been set up.");
+        // DRTIO: enable TX after the reboot, with stable clock
+        #[cfg(has_drtio)]
+        unsafe {
+            csr::drtio_transceiver::txenable_write(0xffffffffu32 as _);
+        }
         return;
     }
     match clock_cfg {
@@ -231,46 +228,26 @@ fn setup_si5324(clock_cfg: RtioClock) {
     }
 
     // switch sysclk source to si5324
+    info!("Switching sys clock, rebooting...");
+    // delay for clean UART log, wait until UART FIFO is empty
+    clock::spin_us(1300); 
     #[cfg(not(has_drtio))]
-    {
-        info!("Switching sys clock, rebooting...");
-        // delay for clean UART log, wait until UART FIFO is empty
-        clock::spin_us(1300); 
-        unsafe {
-            csr::crg::clock_sel_write(1);
-            loop {}
-        }
+    unsafe {
+        csr::crg::clock_sel_write(1);
     }
+    #[cfg(has_drtio)]
+    unsafe {
+        // clock switch and reboot will begin after TX is initialized
+        // and TX will be initialized after this
+        csr::drtio_transceiver::stable_clkin_write(1);
+    }
+    loop {}
 }
 
 
 pub fn init() {
     let clock_cfg = get_rtio_clock_cfg();
-    setup_si5324(clock_cfg);
-
-    #[cfg(has_drtio)]
-    {
-        let switched = unsafe {
-            csr::crg::switch_done_read()
-        };
-        if switched == 0 {
-            info!("Switching sys clock, rebooting...");
-            clock::spin_us(500); // delay for clean UART log
-            unsafe {
-                // clock switch and reboot will begin after TX is initialized
-                // and TX will be initialized after this
-                csr::drtio_transceiver::stable_clkin_write(1);
-            }
-            loop {}
-        }
-        else {
-            // enable TX after the reboot, with stable clock
-            unsafe {
-                csr::drtio_transceiver::txenable_write(0xffffffffu32 as _);
-            }
-        }
-    }
-
+    setup_sysclk(clock_cfg);
 
     #[cfg(has_rtio_crg)]
     {
