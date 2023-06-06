@@ -410,22 +410,6 @@ fn drtiosat_process_errors() {
     }
 }
 
-
-#[cfg(has_rtio_crg)]
-fn init_rtio_crg() {
-    unsafe {
-        csr::rtio_crg::pll_reset_write(0);
-    }
-    clock::spin_us(150);
-    let locked = unsafe { csr::rtio_crg::pll_locked_read() != 0 };
-    if !locked {
-        error!("RTIO clock failed");
-    }
-}
-
-#[cfg(not(has_rtio_crg))]
-fn init_rtio_crg() { }
-
 fn hardware_tick(ts: &mut u64) {
     let now = clock::get_ms();
     if now > *ts {
@@ -435,106 +419,7 @@ fn hardware_tick(ts: &mut u64) {
     }
 }
 
-#[cfg(all(has_si5324, rtio_frequency = "125.0"))]
-const SI5324_SETTINGS: si5324::FrequencySettings
-    = si5324::FrequencySettings {
-    n1_hs  : 5,
-    nc1_ls : 8,
-    n2_hs  : 7,
-    n2_ls  : 360,
-    n31    : 63,
-    n32    : 63,
-    bwsel  : 4,
-    crystal_as_ckin2: true
-};
-
-#[cfg(all(has_si5324, rtio_frequency = "100.0"))]
-const SI5324_SETTINGS: si5324::FrequencySettings
-    = si5324::FrequencySettings {
-    n1_hs  : 5,
-    nc1_ls : 10,
-    n2_hs  : 10,
-    n2_ls  : 250,
-    n31    : 50,
-    n32    : 50,
-    bwsel  : 4,
-    crystal_as_ckin2: true
-};
-
-fn sysclk_setup() {
-    let switched = unsafe {
-        csr::crg::switch_done_read()
-    };
-    if switched == 1 {
-        info!("Clocking has already been set up.");
-        return;
-    }
-    else {
-        #[cfg(has_si5324)]
-        si5324::setup(&SI5324_SETTINGS, si5324::Input::Ckin1).expect("cannot initialize Si5324");
-        info!("Switching sys clock, rebooting...");
-        // delay for clean UART log, wait until UART FIFO is empty
-        clock::spin_us(1300);
-        unsafe {
-            csr::drtio_transceiver::stable_clkin_write(1);
-        }
-        loop {}
-    }
-}
-
-
-#[no_mangle]
-pub extern fn main() -> i32 {
-    extern {
-        static mut _fheap: u8;
-        static mut _eheap: u8;
-        static mut _sstack_guard: u8;
-    }
-
-    unsafe {
-        ALLOC.add_range(&mut _fheap, &mut _eheap);
-        pmp::init_stack_guard(&_sstack_guard as *const u8 as usize);
-    }
-
-    clock::init();
-    uart_logger::ConsoleLogger::register();
-
-    info!("ARTIQ satellite manager starting...");
-    info!("software ident {}", csr::CONFIG_IDENTIFIER_STR);
-    info!("gateware ident {}", ident::read(&mut [0; 64]));
-
-    #[cfg(has_i2c)]
-    i2c::init().expect("I2C initialization failed");
-    #[cfg(all(soc_platform = "kasli", hw_rev = "v2.0"))]
-    let (mut io_expander0, mut io_expander1);
-    #[cfg(all(soc_platform = "kasli", hw_rev = "v2.0"))]
-    {
-        io_expander0 = board_misoc::io_expander::IoExpander::new(0).unwrap();
-        io_expander1 = board_misoc::io_expander::IoExpander::new(1).unwrap();
-        io_expander0.init().expect("I2C I/O expander #0 initialization failed");
-        io_expander1.init().expect("I2C I/O expander #1 initialization failed");
-
-        // Actively drive TX_DISABLE to false on SFP0..3
-        io_expander0.set_oe(0, 1 << 1).unwrap();
-        io_expander0.set_oe(1, 1 << 1).unwrap();
-        io_expander1.set_oe(0, 1 << 1).unwrap();
-        io_expander1.set_oe(1, 1 << 1).unwrap();
-        io_expander0.set(0, 1, false);
-        io_expander0.set(1, 1, false);
-        io_expander1.set(0, 1, false);
-        io_expander1.set(1, 1, false);
-        io_expander0.service().unwrap();
-        io_expander1.service().unwrap();
-    }
-
-    sysclk_setup();
-
-    unsafe {
-        csr::drtio_transceiver::txenable_write(0xffffffffu32 as _);
-    }
-
-    init_rtio_crg();
-
+fn satman_thread(io: &Io) {
     #[cfg(has_drtio_routing)]
     let mut repeaters = [repeater::Repeater::default(); csr::DRTIOREP.len()];
     #[cfg(not(has_drtio_routing))]
@@ -553,12 +438,8 @@ pub extern fn main() -> i32 {
             for rep in repeaters.iter_mut() {
                 rep.service(&routing_table, rank);
             }
-            #[cfg(all(soc_platform = "kasli", hw_rev = "v2.0"))]
-            {
-                io_expander0.service().expect("I2C I/O expander #0 service failed");
-                io_expander1.service().expect("I2C I/O expander #1 service failed");
-            }
             hardware_tick(&mut hardware_tick_ts);
+            io.relinquish().unwrap();
         }
 
         info!("uplink is up, switching to recovered clock");
@@ -586,11 +467,6 @@ pub extern fn main() -> i32 {
             for rep in repeaters.iter_mut() {
                 rep.service(&routing_table, rank);
             }
-            #[cfg(all(soc_platform = "kasli", hw_rev = "v2.0"))]
-            {
-                io_expander0.service().expect("I2C I/O expander #0 service failed");
-                io_expander1.service().expect("I2C I/O expander #1 service failed");
-            }
             hardware_tick(&mut hardware_tick_ts);
             if drtiosat_tsc_loaded() {
                 info!("TSC loaded from uplink");
@@ -610,6 +486,7 @@ pub extern fn main() -> i32 {
                     error!("error sending DMA playback status: {}", e);
                 }
             }
+            io.relinquish().unwrap();
         }
 
         drtiosat_reset_phy(true);
@@ -621,52 +498,10 @@ pub extern fn main() -> i32 {
     }
 }
 
-#[no_mangle]
-pub extern fn exception(_regs: *const u32) {
-    let pc = mepc::read();
-    let cause = mcause::read().cause();
-    
-    fn hexdump(addr: u32) {
-        let addr = (addr - addr % 4) as *const u32;
-        let mut ptr  = addr;
-        println!("@ {:08p}", ptr);
-        for _ in 0..4 {
-            print!("+{:04x}: ", ptr as usize - addr as usize);
-            print!("{:08x} ",   unsafe { *ptr }); ptr = ptr.wrapping_offset(1);
-            print!("{:08x} ",   unsafe { *ptr }); ptr = ptr.wrapping_offset(1);
-            print!("{:08x} ",   unsafe { *ptr }); ptr = ptr.wrapping_offset(1);
-            print!("{:08x}\n",  unsafe { *ptr }); ptr = ptr.wrapping_offset(1);
-        }
-    }
+pub fn start(io: &Io) -> i32 {
+    info!("ARTIQ satellite manager starting...");
 
-    hexdump(u32::try_from(pc).unwrap());
-    let mtval = mtval::read();
-    panic!("exception {:?} at PC 0x{:x}, trap value 0x{:x}", cause, u32::try_from(pc).unwrap(), mtval)
-}
+    init_rtio_crg();
 
-#[no_mangle]
-pub extern fn abort() {
-    println!("aborted");
-    loop {}
-}
-
-#[no_mangle] // https://github.com/rust-lang/rust/issues/{38281,51647}
-#[panic_handler]
-pub fn panic_fmt(info: &core::panic::PanicInfo) -> ! {
-    #[cfg(has_error_led)]
-    unsafe {
-        csr::error_led::out_write(1);
-    }
-
-    if let Some(location) = info.location() {
-        print!("panic at {}:{}:{}", location.file(), location.line(), location.column());
-    } else {
-        print!("panic at unknown location");
-    }
-    if let Some(message) = info.message() {
-        println!(": {}", message);
-    } else {
-        println!("");
-    }
-    loop {}
+    io.spawn(16384, satman_thread);
 }
