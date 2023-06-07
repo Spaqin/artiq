@@ -314,9 +314,10 @@ class _MasterBase(MiniSoC, AMPSoC):
 
 
 
-class _SatelliteBase(MiniSoC):
+class _SatelliteBase(MiniSoC, AMPSoC):
     mem_map = {
         "drtioaux":     0x50000000,
+        "mailbox":      0x70000000
     }
     mem_map.update(MiniSoC.mem_map)
 
@@ -333,6 +334,7 @@ class _SatelliteBase(MiniSoC):
                  clk_freq=clk_freq,
                  rtio_sys_merge=True,
                  **kwargs)
+        AMPSoC.__init__(self)
         add_identifier(self, gateware_identifier_str=gateware_identifier_str)
 
         if isinstance(self.platform.toolchain, XilinxVivadoToolchain):

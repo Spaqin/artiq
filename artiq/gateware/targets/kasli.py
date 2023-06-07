@@ -406,9 +406,10 @@ class MasterBase(MiniSoC, AMPSoC):
         self.drtio_qpll_channel, self.ethphy_qpll_channel = qpll.channels
 
 
-class SatelliteBase(MiniSoC):
+class SatelliteBase(MiniSoC, AMPSoC):
     mem_map = {
         "drtioaux": 0x50000000,
+        "mailbox":  0x70000000
     }
     mem_map.update(MiniSoC.mem_map)
 
@@ -430,6 +431,7 @@ class SatelliteBase(MiniSoC):
                  clk_freq=rtio_clk_freq,
                  rtio_sys_merge=True,
                  **kwargs)
+        AMPSoC.__init__(self)
         add_identifier(self, gateware_identifier_str=gateware_identifier_str)
 
         platform = self.platform
