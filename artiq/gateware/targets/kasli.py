@@ -70,6 +70,7 @@ class StandaloneBase(MiniSoC, AMPSoC):
         AMPSoC.__init__(self)
         add_identifier(self, gateware_identifier_str=gateware_identifier_str)
 
+
         if self.platform.hw_rev == "v2.0":
             self.submodules.error_led = gpio.GPIOOut(Cat(
                 self.platform.request("error_led")))
@@ -408,8 +409,9 @@ class MasterBase(MiniSoC, AMPSoC):
 
 class SatelliteBase(MiniSoC, AMPSoC):
     mem_map = {
-        "drtioaux": 0x50000000,
-        "mailbox":  0x70000000
+        "rtio":          0x20000000,
+        "drtioaux":      0x50000000,
+        "mailbox":       0x70000000
     }
     mem_map.update(MiniSoC.mem_map)
 
@@ -580,12 +582,19 @@ class SatelliteBase(MiniSoC, AMPSoC):
             self.submodules.rtio_moninj = rtio.MonInj(rtio_channels)
             self.csr_devices.append("rtio_moninj")
 
+        # satellite (master-controlled) RTIO
         self.submodules.local_io = SyncRTIO(self.rtio_tsc, rtio_channels, lane_count=sed_lanes)
         self.comb += self.drtiosat.async_errors.eq(self.local_io.async_errors)
+
+        # sub kernel RTIO
+        self.submodules.rtio = rtio.KernelInitiator(self.rtio_tsc)
+        self.register_kernel_cpu_csrdevice("rtio")
+
         self.submodules.rtio_dma = rtio.DMA(self.get_native_sdram_if(), self.cpu_dw)
         self.csr_devices.append("rtio_dma")
+        # remember to switch cricon to 2 when running kernels
         self.submodules.cri_con = rtio.CRIInterconnectShared(
-            [self.drtiosat.cri, self.rtio_dma.cri],
+            [self.drtiosat.cri, self.rtio_dma.cri, self.rtio.cri],
             [self.local_io.cri] + self.drtio_cri,
             enable_routing=True)
         self.csr_devices.append("cri_con")
