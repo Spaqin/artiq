@@ -206,6 +206,17 @@ unsafe fn kern_load(io: &Io, session: &mut Session, library: &[u8])
 
     kernel::start();
 
+    // info!("Kernel raw data, len: {}", library.len());
+    // for i in (0..library.len()).step_by(16) {
+    //     let mut j = i;
+    //     while j < i + 16 && j < library.len() {
+    //         print!("0x{:02x}, ", library[j]);
+    //         j += 1;
+    //     }
+    //     print!("\n");
+    // }
+    // info!("kernel end");
+
     kern_send(io, &kern::LoadRequest(&library))?;
     kern_recv(io, |reply| {
         match reply {

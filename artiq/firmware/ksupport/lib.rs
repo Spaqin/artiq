@@ -396,7 +396,7 @@ extern fn dma_retrieve(name: &CSlice<u8>) -> DmaTrace {
     })
 }
 
-#[cfg(has_rtio_dma)]
+#[cfg(kernel_has_rtio_dma)]
 #[unwind(allowed)]
 extern fn dma_playback(timestamp: i64, ptr: i32, _uses_ddma: bool) {
     assert!(ptr % 64 == 0);
@@ -454,7 +454,7 @@ extern fn dma_playback(timestamp: i64, ptr: i32, _uses_ddma: bool) {
     }
 }
 
-#[cfg(not(has_rtio_dma))]
+#[cfg(not(kernel_has_rtio_dma))]
 #[unwind(allowed)]
 extern fn dma_playback(_timestamp: i64, _ptr: i32, _uses_ddma: bool) {
     unimplemented!("not(has_rtio_dma)")
@@ -507,7 +507,6 @@ pub unsafe fn main() {
     let image = slice::from_raw_parts_mut(kernel_proto::KERNELCPU_PAYLOAD_ADDRESS as *mut u8,
                                           kernel_proto::KERNELCPU_LAST_ADDRESS -
                                           kernel_proto::KERNELCPU_PAYLOAD_ADDRESS);
-
     let library = recv!(&LoadRequest(library) => {
         match Library::load(library, image, &api::resolve) {
             Err(error) => {

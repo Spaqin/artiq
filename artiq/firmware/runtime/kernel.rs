@@ -19,6 +19,7 @@ pub unsafe fn start() {
     }
     let ksupport_start = &_binary____ksupport_ksupport_elf_start as *const _;
     let ksupport_end   = &_binary____ksupport_ksupport_elf_end as *const _;
+    info!("ksupport_start: {:p}, end: {:p}", ksupport_start, ksupport_end);
     ptr::copy_nonoverlapping(ksupport_start,
                              (KERNELCPU_EXEC_ADDRESS - KSUPPORT_HEADER_SIZE) as *mut u8,
                              ksupport_end as usize - ksupport_start as usize);
