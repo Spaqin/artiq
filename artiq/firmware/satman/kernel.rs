@@ -4,6 +4,7 @@ use alloc::{string::String, format};
 use board_artiq::mailbox;
 
 use proto_artiq::kernel_proto as kern;
+use board_misoc::{csr, clock};
 
 mod kernel {
     use core::ptr;
@@ -30,8 +31,6 @@ mod kernel {
                                 (KERNELCPU_EXEC_ADDRESS - KSUPPORT_HEADER_SIZE) as *mut u8,
                                 ksupport_end as usize - ksupport_start as usize);
 
-        info!("ksupport_start: {:p}, end: {:p}", ksupport_start, ksupport_end);
-        info!("before reset: kernel CPU running?: {}", csr::kernel_cpu::reset_read());
         let ptr = (KERNELCPU_EXEC_ADDRESS - KSUPPORT_HEADER_SIZE) as *mut u8;
         for i in 0..(ksupport_end as usize - ksupport_start as usize) {
             let j = i as isize;
@@ -41,7 +40,6 @@ mod kernel {
         }
         csr::kernel_cpu::reset_write(0);
 
-        info!("after reset:  kernel CPU running?: {}", csr::kernel_cpu::reset_read());
         rpc_queue::init();
     }
 
@@ -77,8 +75,7 @@ macro_rules! unexpected {
 enum KernelState {
     Absent,
     Loaded,
-    Running,
-    RpcWait
+    Running
 }
 
 // Per-connection state
@@ -101,7 +98,7 @@ impl Session {
     fn running(&self) -> bool {
         match self.kernel_state {
             KernelState::Absent  | KernelState::Loaded  => false,
-            KernelState::Running | KernelState::RpcWait => true
+            KernelState::Running => true
         }
     }
 
@@ -118,7 +115,7 @@ impl Session {
 fn kern_recv_notrace<R, F>(f: F) -> Result<R, Error>
         where F: FnOnce(&kern::Message) -> Result<R, Error> {
     info!("waiting for mailbox rcv");
-    while mailbox::receive() != 0 {};
+    while mailbox::receive() == 0 {};
     info!("YOU GOT MAIL");
     if !kernel::validate(mailbox::receive()) {
         return Err(Error::InvalidPointer(mailbox::receive()))
@@ -218,11 +215,10 @@ pub unsafe fn kern_load(session: &mut Session, library: &[u8])
     })
 }
 
-fn process_kern_message(session: &mut Session) -> Result<bool, Error> {
+pub fn process_kern_message(session: &mut Session) -> Result<bool, Error> {
     kern_recv_notrace(|request| {
         match (request, session.kernel_state) {
-            (&kern::LoadReply(_), KernelState::Loaded) |
-            (&kern::RpcRecvRequest(_), KernelState::RpcWait) => {
+            (&kern::LoadReply(_), KernelState::Loaded) => {
                 // We're standing by; ignore the message.
                 return Ok(false)
             }
@@ -235,9 +231,9 @@ fn process_kern_message(session: &mut Session) -> Result<bool, Error> {
 
         kern_recv_dotrace(request);
 
-        // if kern_hwreq::process_kern_hwreq(io, aux_mutex, ddma_mutex, routing_table, up_destinations, request)? {
-        //     return Ok(false)
-        // }
+        if process_kern_hwreq(request)? {
+            return Ok(false)
+        }
 
         match request {
             &kern::Log(args) => {
@@ -329,4 +325,53 @@ fn process_kern_message(session: &mut Session) -> Result<bool, Error> {
             request => unexpected!("unexpected request {:?} from kernel CPU", request)
         }.and(Ok(false))
     })
+}
+
+pub fn process_kern_hwreq(request: &kern::Message) -> Result<bool, Error> {
+match request {
+    &kern::RtioInitRequest => {
+        info!("resetting RTIO");
+        unsafe {
+            csr::drtiosat::reset_write(1);
+            clock::spin_us(100);
+            csr::drtiosat::reset_write(0);
+        }
+        kern_acknowledge()
+    }
+
+    &kern::RtioDestinationStatusRequest { destination: _destination } => {
+        kern_send(&kern::RtioDestinationStatusReply { up: true })
+    }
+
+    &kern::I2cStartRequest { busno } => {
+        kern_send(&kern::I2cBasicReply { succeeded: false })
+    }
+    &kern::I2cRestartRequest { busno } => {
+        kern_send(&kern::I2cBasicReply { succeeded: false})
+    }
+    &kern::I2cStopRequest { busno } => {
+        kern_send(&kern::I2cBasicReply { succeeded: false })
+    }
+    &kern::I2cWriteRequest { busno, data } => {
+        kern_send(&kern::I2cWriteReply { succeeded: false, ack: false })
+    }
+    &kern::I2cReadRequest { busno, ack } => {
+        kern_send(&kern::I2cReadReply { succeeded: false, data: 0xff })
+    }
+    &kern::I2cSwitchSelectRequest { busno, address, mask } => {
+        kern_send(&kern::I2cBasicReply { succeeded: false })
+    }
+
+    &kern::SpiSetConfigRequest { busno, flags, length, div, cs } => {
+        kern_send(&kern::SpiBasicReply { succeeded: false })
+    },
+    &kern::SpiWriteRequest { busno, data } => {
+        kern_send(&kern::SpiBasicReply { succeeded: false })
+    }
+    &kern::SpiReadRequest { busno } => {
+        kern_send(&kern::SpiReadReply { succeeded: false, data: 0 })
+    }
+
+    _ => return Ok(false)
+}.and(Ok(true))
 }

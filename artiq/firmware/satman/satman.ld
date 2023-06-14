@@ -81,11 +81,11 @@ SECTIONS
         _fstack = . - 16;
     } > main_ram
 
-    /* almost 64MB heap for alloc use */
+    /* remainder of 64MB for heap for alloc use */
     .heap (NOLOAD) : ALIGN(16)
     {
         _fheap = .;
-        . = 0x44000000;
+        . = 0x44000000; // not to overwrite RPC queue
         _eheap = .;
     } > main_ram
 }

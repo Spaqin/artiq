@@ -734,8 +734,9 @@ pub extern fn main() -> i32 {
     info!("running test kernel");
     let mut sesh = kernel::Session::new();
     unsafe { kernel::kern_load(&mut sesh, &TEST_KERNEL).unwrap(); }
+    drtiosat_reset_phy(false);
     kernel::kern_run(&mut sesh).unwrap();
-    info!("kernel running, well, nothing else will but who cares");
+    kernel::process_kern_message(&mut sesh); // process rtioinit
 
     loop {
         while !drtiosat_link_rx_up() {
