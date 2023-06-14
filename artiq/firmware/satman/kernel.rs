@@ -31,13 +31,6 @@ mod kernel {
                                 (KERNELCPU_EXEC_ADDRESS - KSUPPORT_HEADER_SIZE) as *mut u8,
                                 ksupport_end as usize - ksupport_start as usize);
 
-        let ptr = (KERNELCPU_EXEC_ADDRESS - KSUPPORT_HEADER_SIZE) as *mut u8;
-        for i in 0..(ksupport_end as usize - ksupport_start as usize) {
-            let j = i as isize;
-            if *ptr.offset(j) != *ksupport_start.offset(j) {
-                info!("mismatch in memory at: {}", i);
-            }
-        }
         csr::kernel_cpu::reset_write(0);
 
         rpc_queue::init();
@@ -114,9 +107,7 @@ impl Session {
 
 fn kern_recv_notrace<R, F>(f: F) -> Result<R, Error>
         where F: FnOnce(&kern::Message) -> Result<R, Error> {
-    info!("waiting for mailbox rcv");
     while mailbox::receive() == 0 {};
-    info!("YOU GOT MAIL");
     if !kernel::validate(mailbox::receive()) {
         return Err(Error::InvalidPointer(mailbox::receive()))
     }
@@ -178,7 +169,6 @@ pub fn kern_send(request: &kern::Message) -> Result<(), Error> {
     unsafe { mailbox::send(request as *const _ as usize) }
     loop {
         if mailbox::acknowledged() {
-            info!("mailbox acknowledged!");
             break;
         }
     }
@@ -194,7 +184,6 @@ pub unsafe fn kern_load(session: &mut Session, library: &[u8])
     kernel::start();
 
     kern_send(&kern::LoadRequest(&library)).unwrap();
-    info!("load request sent");
     kern_recv(|reply| {
         match reply {
             kern::LoadReply(Ok(())) => {
