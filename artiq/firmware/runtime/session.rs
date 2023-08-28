@@ -421,7 +421,9 @@ fn process_kern_message(io: &Io, aux_mutex: &Mutex,
             }
             &kern::DmaAwaitRemoteRequest { id: _id } => {
                 #[cfg(has_drtio)]
-                let reply = match remote_dma::await_done(io, ddma_mutex, _id as u32, 10_000) {
+                let reply = match remote_dma::await_done(io, ddma_mutex, _id as u32, 
+                        session.congress.dma_manager.get_duration_ms(_id as u32) + 1_000
+                    ) {
                     Ok(remote_dma::RemoteState::PlaybackEnded { error, channel, timestamp }) =>
                         kern::DmaAwaitRemoteReply {
                             timeout: false,

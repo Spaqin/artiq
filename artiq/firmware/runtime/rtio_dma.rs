@@ -1,6 +1,8 @@
 use core::mem;
 use alloc::{vec::Vec, string::String, collections::btree_map::BTreeMap};
 use sched::{Io, Mutex};
+#[cfg(has_drtio)]
+use board_misoc::csr;
 
 const ALIGNMENT: usize = 64;
 
@@ -299,6 +301,15 @@ impl Manager {
     #[cfg(has_drtio)]
     pub fn get_id(&mut self, name: &str) -> Option<&u32> {
         self.name_map.get(name)
+    }
+
+    #[cfg(has_drtio)]
+    pub fn get_duration_ms(&mut self, id: u32) -> u64 {
+        // necessary for determining timeout, returns in miliseconds
+        match self.entries.get(&id) {
+            Some(entry) => entry.duration / (8*csr::CONFIG_CLOCK_FREQUENCY/1_000_000) as u64,
+            None => 0
+        }
     }
 
     pub fn with_trace<F, R>(&self, name: &str, f: F) -> R
