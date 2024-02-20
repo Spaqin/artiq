@@ -1,4 +1,4 @@
-#![feature(never_type, panic_info_message, asm, default_alloc_error_handler)]
+#![feature(never_type, panic_info_message, llvm_asm, default_alloc_error_handler, try_trait, btree_retain, const_in_array_repeat_expressions)]
 #![no_std]
 
 #[macro_use]
@@ -41,14 +41,14 @@ use analyzer::Analyzer;
 static mut ALLOC: alloc_list::ListAlloc = alloc_list::EMPTY;
 
 mod repeater;
-mod routing;
+mod aux;
 mod dma;
 mod analyzer;
 mod kernel;
 mod cache;
 mod mgmt;
 
-fn drtiosat_reset(reset: bool) {
+pub fn drtiosat_reset(reset: bool) {
     unsafe {
         csr::drtiosat::reset_write(if reset { 1 } else { 0 });
     }
@@ -108,95 +108,43 @@ pub fn cricon_read() -> RtioMaster {
     }
 }
 
-#[cfg(has_drtio_routing)]
-macro_rules! forward {
-    ($router:expr, $routing_table:expr, $destination:expr, $rank:expr, $self_destination:expr, $repeaters:expr, $packet:expr) => {{
-        let hop = $routing_table.0[$destination as usize][$rank as usize];
-        if hop != 0 {
-            let repno = (hop - 1) as usize;
-            if repno < $repeaters.len() {
-                if $packet.expects_response() {
-                    return $repeaters[repno].aux_forward($packet, $router, $routing_table, $rank, $self_destination);
-                } else {
-                    let res = $repeaters[repno].aux_send($packet);
-                    // allow the satellite to parse the packet before next
-                    clock::spin_us(10_000);
-                    return res;
-                }
-            } else {
-                return Err(drtioaux::Error::RoutingError);
-            }
+fn process_aux_packet(dmamgr: &mut DmaManager, analyzer: &mut Analyzer, kernelmgr: &mut KernelManager,
+        _repeaters: &mut [repeater::Repeater], aux_mgr: &mut aux::AuxManager,
+        packet: &drtioaux::Payload, transaction_id: u8, source: u8) {
+    macro_rules! respond {
+        ( $packet:expr ) => {
+            aux_mgr.respond(transaction_id, source, &$packet);
         }
-    }}
-}
-
-#[cfg(not(has_drtio_routing))]
-macro_rules! forward {
-    ($router:expr, $routing_table:expr, $destination:expr, $rank:expr, $self_destination:expr, $repeaters:expr, $packet:expr) => {}
-}
-
-fn process_aux_packet(dmamgr: &mut DmaManager, analyzer: &mut Analyzer, kernelmgr: &mut KernelManager, coremgr: &mut CoreManager,
-        _repeaters: &mut [repeater::Repeater], _routing_table: &mut drtio_routing::RoutingTable, rank: &mut u8,
-        router: &mut routing::Router, self_destination: &mut u8, packet: drtioaux::Packet
-) -> Result<(), drtioaux::Error<!>> {
-    // In the code below, *_chan_sel_write takes an u8 if there are fewer than 256 channels,
-    // and u16 otherwise; hence the `as _` conversion.
-    match packet {
-        drtioaux::Packet::EchoRequest =>
-            drtioaux::send(0, &drtioaux::Packet::EchoReply),
-        drtioaux::Packet::ResetRequest => {
-            info!("resetting RTIO");
-            drtiosat_reset(true);
-            clock::spin_us(100);
-            drtiosat_reset(false);
-            for rep in _repeaters.iter() {
-                if let Err(e) = rep.rtio_reset() {
-                    error!("failed to issue RTIO reset ({})", e);
-                }
+    }
+    match *packet {
+        drtioaux::Payload::DestinationStatusRequest => {
+            let errors;
+            unsafe {
+                errors = csr::drtiosat::rtio_error_read();
             }
-            drtioaux::send(0, &drtioaux::Packet::ResetAck)
-        },
-
-        drtioaux::Packet::DestinationStatusRequest { destination } => {
-            #[cfg(has_drtio_routing)]
-            let hop = _routing_table.0[destination as usize][*rank as usize];
-            #[cfg(not(has_drtio_routing))]
-            let hop = 0;
-
-            if hop == 0 {
-                *self_destination = destination;
-                let errors;
+            if errors & 1 != 0 {
+                let channel;
                 unsafe {
-                    errors = csr::drtiosat::rtio_error_read();
+                    channel = csr::drtiosat::sequence_error_channel_read();
+                    csr::drtiosat::rtio_error_write(1);
                 }
-                if errors & 1 != 0 {
-                    let channel;
-                    unsafe {
-                        channel = csr::drtiosat::sequence_error_channel_read();
-                        csr::drtiosat::rtio_error_write(1);
-                    }
-                    drtioaux::send(0,
-                        &drtioaux::Packet::DestinationSequenceErrorReply { channel })?;
-                } else if errors & 2 != 0 {
-                    let channel;
-                    unsafe {
-                        channel = csr::drtiosat::collision_channel_read();
-                        csr::drtiosat::rtio_error_write(2);
-                    }
-                    drtioaux::send(0,
-                        &drtioaux::Packet::DestinationCollisionReply { channel })?;
-                } else if errors & 4 != 0 {
-                    let channel;
-                    unsafe {
-                        channel = csr::drtiosat::busy_channel_read();
-                        csr::drtiosat::rtio_error_write(4);
-                    }
-                    drtioaux::send(0,
-                        &drtioaux::Packet::DestinationBusyReply { channel })?;
+                respond!(drtioaux::Payload::DestinationSequenceErrorReply { channel })
+            } else if errors & 2 != 0 {
+                let channel;
+                unsafe {
+                    channel = csr::drtiosat::collision_channel_read();
+                    csr::drtiosat::rtio_error_write(2);
                 }
-                else {
-                    drtioaux::send(0, &drtioaux::Packet::DestinationOkReply)?;
+                respond!(drtioaux::Payload::DestinationCollisionReply { channel })
+            } else if errors & 4 != 0 {
+                let channel;
+                unsafe {
+                    channel = csr::drtiosat::busy_channel_read();
+                    csr::drtiosat::rtio_error_write(4);
                 }
+                respond!(drtioaux::Payload::DestinationBusyReply { channel })
+            } else {
+                respond!(drtioaux::Payload::DestinationOkReply)
             }
 
             #[cfg(has_drtio_routing)]
@@ -205,18 +153,18 @@ fn process_aux_packet(dmamgr: &mut DmaManager, analyzer: &mut Analyzer, kernelmg
                     let hop = hop as usize;
                     if hop <= csr::DRTIOREP.len() {
                         let repno = hop - 1;
-                        match _repeaters[repno].aux_forward(&drtioaux::Packet::DestinationStatusRequest {
+                        match _repeaters[repno].aux_forward(&drtioaux::Payload::DestinationStatusRequest {
                             destination: destination
                         }, router, _routing_table, *rank, *self_destination) {
                             Ok(()) => (),
-                            Err(drtioaux::Error::LinkDown) => drtioaux::send(0, &drtioaux::Packet::DestinationDownReply)?,
+                            Err(drtioaux::Error::LinkDown) => drtioaux::send(0, &drtioaux::Payload::DestinationDownReply)?,
                             Err(e) => {
-                                drtioaux::send(0, &drtioaux::Packet::DestinationDownReply)?;
+                                drtioaux::send(0, &drtioaux::Payload::DestinationDownReply)?;
                                 error!("aux error when handling destination status request: {}", e);
                             },
                         }
                     } else {
-                        drtioaux::send(0, &drtioaux::Packet::DestinationDownReply)?;
+                        drtioaux::send(0, &drtioaux::Payload::DestinationDownReply)?;
                     }
                 }
             }
@@ -224,17 +172,17 @@ fn process_aux_packet(dmamgr: &mut DmaManager, analyzer: &mut Analyzer, kernelmg
         }
 
         #[cfg(has_drtio_routing)]
-        drtioaux::Packet::RoutingSetPath { destination, hops } => {
+        drtioaux::Payload::RoutingSetPath { destination, hops } => {
             _routing_table.0[destination as usize] = hops;
             for rep in _repeaters.iter() {
                 if let Err(e) = rep.set_path(destination, &hops) {
                     error!("failed to set path ({})", e);
                 }
             }
-            drtioaux::send(0, &drtioaux::Packet::RoutingAck)
+            drtioaux::send(0, &drtioaux::Payload::RoutingAck)
         }
         #[cfg(has_drtio_routing)]
-        drtioaux::Packet::RoutingSetRank { rank: new_rank } => {
+        drtioaux::Payload::RoutingSetRank { rank: new_rank } => {
             *rank = new_rank;
             drtio_routing::interconnect_enable_all(_routing_table, new_rank);
 
@@ -248,20 +196,19 @@ fn process_aux_packet(dmamgr: &mut DmaManager, analyzer: &mut Analyzer, kernelmg
             info!("rank: {}", new_rank);
             info!("routing table: {}", _routing_table);
 
-            drtioaux::send(0, &drtioaux::Packet::RoutingAck)
+            drtioaux::send(0, &drtioaux::Payload::RoutingAck)
         }
 
         #[cfg(not(has_drtio_routing))]
-        drtioaux::Packet::RoutingSetPath { destination: _, hops: _ } => {
-            drtioaux::send(0, &drtioaux::Packet::RoutingAck)
+        drtioaux::Payload::RoutingSetPath { destination: _, hops: _ } => {
+            drtioaux::send(0, &drtioaux::Payload::RoutingAck)
         }
         #[cfg(not(has_drtio_routing))]
-        drtioaux::Packet::RoutingSetRank { rank: _ } => {
-            drtioaux::send(0, &drtioaux::Packet::RoutingAck)
+        drtioaux::Payload::RoutingSetRank { rank: _ } => {
+            drtioaux::send(0, &drtioaux::Payload::RoutingAck)
         }
 
-        drtioaux::Packet::MonitorRequest { destination: _destination, channel, probe } => {
-            forward!(router, _routing_table, _destination, *rank, *self_destination, _repeaters, &packet);
+        drtioaux::Payload::MonitorRequest { channel, probe } => {
             let value;
             #[cfg(has_rtio_moninj)]
             unsafe {
@@ -274,21 +221,17 @@ fn process_aux_packet(dmamgr: &mut DmaManager, analyzer: &mut Analyzer, kernelmg
             {
                 value = 0;
             }
-            let reply = drtioaux::Packet::MonitorReply { value: value };
-            drtioaux::send(0, &reply)
+            respond!(drtioaux::Payload::MonitorReply { value: value })
         },
-        drtioaux::Packet::InjectionRequest { destination: _destination, channel, overrd, value } => {
-            forward!(router, _routing_table, _destination, *rank, *self_destination, _repeaters, &packet);
+        drtioaux::Payload::InjectionRequest { channel, overrd, value } => {
             #[cfg(has_rtio_moninj)]
             unsafe {
                 csr::rtio_moninj::inj_chan_sel_write(channel as _);
                 csr::rtio_moninj::inj_override_sel_write(overrd);
                 csr::rtio_moninj::inj_value_write(value);
             }
-            Ok(())
         },
-        drtioaux::Packet::InjectionStatusRequest { destination: _destination, channel, overrd } => {
-            forward!(router, _routing_table, _destination, *rank, *self_destination, _repeaters, &packet);
+        drtioaux::Payload::InjectionStatusRequest { channel, overrd } => {
             let value;
             #[cfg(has_rtio_moninj)]
             unsafe {
@@ -300,141 +243,108 @@ fn process_aux_packet(dmamgr: &mut DmaManager, analyzer: &mut Analyzer, kernelmg
             {
                 value = 0;
             }
-            drtioaux::send(0, &drtioaux::Packet::InjectionStatusReply { value: value })
+            respond!(drtioaux::Payload::InjectionStatusReply { value: value })
         },
 
-        drtioaux::Packet::I2cStartRequest { destination: _destination, busno } => {
-            forward!(router, _routing_table, _destination, *rank, *self_destination, _repeaters, &packet);
+        drtioaux::Payload::I2cStartRequest { busno } => {
             let succeeded = i2c::start(busno).is_ok();
-            drtioaux::send(0, &drtioaux::Packet::I2cBasicReply { succeeded: succeeded })
+            respond!(drtioaux::Payload::I2cBasicReply { succeeded: succeeded })
         }
-        drtioaux::Packet::I2cRestartRequest { destination: _destination, busno } => {
-            forward!(router, _routing_table, _destination, *rank, *self_destination, _repeaters, &packet);
+        drtioaux::Payload::I2cRestartRequest { busno } => {
             let succeeded = i2c::restart(busno).is_ok();
-            drtioaux::send(0, &drtioaux::Packet::I2cBasicReply { succeeded: succeeded })
+            respond!(drtioaux::Payload::I2cBasicReply { succeeded: succeeded })
         }
-        drtioaux::Packet::I2cStopRequest { destination: _destination, busno } => {
-            forward!(router, _routing_table, _destination, *rank, *self_destination, _repeaters, &packet);
+        drtioaux::Payload::I2cStopRequest { busno } => {
             let succeeded = i2c::stop(busno).is_ok();
-            drtioaux::send(0, &drtioaux::Packet::I2cBasicReply { succeeded: succeeded })
+            respond!(drtioaux::Payload::I2cBasicReply { succeeded: succeeded })
         }
-        drtioaux::Packet::I2cWriteRequest { destination: _destination, busno, data } => {
-            forward!(router, _routing_table, _destination, *rank, *self_destination, _repeaters, &packet);
+        drtioaux::Payload::I2cWriteRequest { busno, data } => {
             match i2c::write(busno, data) {
-                Ok(ack) => drtioaux::send(0,
-                    &drtioaux::Packet::I2cWriteReply { succeeded: true, ack: ack }),
-                Err(_) => drtioaux::send(0,
-                    &drtioaux::Packet::I2cWriteReply { succeeded: false, ack: false })
+                Ok(ack) => respond!(
+                    drtioaux::Payload::I2cWriteReply { succeeded: true, ack: ack }),
+                Err(_) => respond!(
+                    drtioaux::Payload::I2cWriteReply { succeeded: false, ack: false })
             }
         }
-        drtioaux::Packet::I2cReadRequest { destination: _destination, busno, ack } => {
-            forward!(router, _routing_table, _destination, *rank, *self_destination, _repeaters, &packet);
+        drtioaux::Payload::I2cReadRequest { busno, ack } => {
             match i2c::read(busno, ack) {
-                Ok(data) => drtioaux::send(0,
-                    &drtioaux::Packet::I2cReadReply { succeeded: true, data: data }),
-                Err(_) => drtioaux::send(0,
-                    &drtioaux::Packet::I2cReadReply { succeeded: false, data: 0xff })
+                Ok(data) => respond!(
+                    drtioaux::Payload::I2cReadReply { succeeded: true, data: data }),
+                Err(_) => respond!(
+                    drtioaux::Payload::I2cReadReply { succeeded: false, data: 0xff })
             }
         }
-        drtioaux::Packet::I2cSwitchSelectRequest { destination: _destination, busno, address, mask } => {
-            forward!(router, _routing_table, _destination, *rank, *self_destination, _repeaters, &packet);
+        drtioaux::Payload::I2cSwitchSelectRequest { busno, address, mask } => {
             let succeeded = i2c::switch_select(busno, address, mask).is_ok();
-            drtioaux::send(0, &drtioaux::Packet::I2cBasicReply { succeeded: succeeded })
+            respond!(drtioaux::Payload::I2cBasicReply { succeeded: succeeded })
         }
 
-        drtioaux::Packet::SpiSetConfigRequest { destination: _destination, busno, flags, length, div, cs } => {
-            forward!(router, _routing_table, _destination, *rank, *self_destination, _repeaters, &packet);
+        drtioaux::Payload::SpiSetConfigRequest { busno, flags, length, div, cs } => {
             let succeeded = spi::set_config(busno, flags, length, div, cs).is_ok();
-            drtioaux::send(0,
-                &drtioaux::Packet::SpiBasicReply { succeeded: succeeded })
+            respond!(
+                drtioaux::Payload::SpiBasicReply { succeeded: succeeded })
         },
-        drtioaux::Packet::SpiWriteRequest { destination: _destination, busno, data } => {
-            forward!(router, _routing_table, _destination, *rank, *self_destination, _repeaters, &packet);
+        drtioaux::Payload::SpiWriteRequest { busno, data } => {
             let succeeded = spi::write(busno, data).is_ok();
-            drtioaux::send(0,
-                &drtioaux::Packet::SpiBasicReply { succeeded: succeeded })
+            respond!(
+                drtioaux::Payload::SpiBasicReply { succeeded: succeeded })
         }
-        drtioaux::Packet::SpiReadRequest { destination: _destination, busno } => {
-            forward!(router, _routing_table, _destination, *rank, *self_destination, _repeaters, &packet);
+        drtioaux::Payload::SpiReadRequest { busno } => {
             match spi::read(busno) {
-                Ok(data) => drtioaux::send(0,
-                    &drtioaux::Packet::SpiReadReply { succeeded: true, data: data }),
-                Err(_) => drtioaux::send(0,
-                    &drtioaux::Packet::SpiReadReply { succeeded: false, data: 0 })
+                Ok(data) => respond!(
+                    drtioaux::Payload::SpiReadReply { succeeded: true, data: data }),
+                Err(_) => respond!(
+                    drtioaux::Payload::SpiReadReply { succeeded: false, data: 0 })
             }
         }
 
-        drtioaux::Packet::AnalyzerHeaderRequest { destination: _destination } => {
-            forward!(router, _routing_table, _destination, *rank, *self_destination, _repeaters, &packet);
+        drtioaux::Payload::AnalyzerHeaderRequest => {
             let header = analyzer.get_header();
-            drtioaux::send(0, &drtioaux::Packet::AnalyzerHeader {
+            respond!(drtioaux::Payload::AnalyzerHeader {
                 total_byte_count: header.total_byte_count,
                 sent_bytes: header.sent_bytes,
                 overflow_occurred: header.overflow,
             })
         }
 
-        drtioaux::Packet::AnalyzerDataRequest { destination: _destination } => {
-            forward!(router, _routing_table, _destination, *rank, *self_destination, _repeaters, &packet);
+        drtioaux::Payload::AnalyzerDataRequest => {
             let mut data_slice: [u8; SAT_PAYLOAD_MAX_SIZE] = [0; SAT_PAYLOAD_MAX_SIZE];
             let meta = analyzer.get_data(&mut data_slice);
-            drtioaux::send(0, &drtioaux::Packet::AnalyzerData {
+            respond!(drtioaux::Payload::AnalyzerData {
                 last: meta.last,
                 length: meta.len,
                 data: data_slice,
             })
         }
 
-        drtioaux::Packet::DmaAddTraceRequest { source, destination, id, status, length, trace } => {
-            forward!(router, _routing_table, destination, *rank, *self_destination, _repeaters, &packet);
-            *self_destination = destination;
+        drtioaux::Payload::DmaAddTraceRequest { id, status, length, trace } => {
             let succeeded = dmamgr.add(source, id, status, &trace, length as usize).is_ok();
-            router.send(drtioaux::Packet::DmaAddTraceReply { 
-                source: *self_destination, destination: source, id: id, succeeded: succeeded 
-            }, _routing_table, *rank, *self_destination)
+            respond!(drtioaux::Payload::DmaAddTraceReply { 
+                id: id, succeeded: succeeded 
+            })
         }
-        drtioaux::Packet::DmaAddTraceReply { source, destination: _destination, id, succeeded } => {
-            forward!(router, _routing_table, _destination, *rank, *self_destination, _repeaters, &packet);
-            dmamgr.ack_upload(kernelmgr, source, id, succeeded, router, *rank, *self_destination, _routing_table);
-            Ok(())
-        }
-        drtioaux::Packet::DmaRemoveTraceRequest { source, destination: _destination, id } => {
-            forward!(router, _routing_table, _destination, *rank, *self_destination, _repeaters, &packet);
+        drtioaux::Payload::DmaRemoveTraceRequest { id } => {
             let succeeded = dmamgr.erase(source, id).is_ok();
-            router.send(drtioaux::Packet::DmaRemoveTraceReply { 
-                destination: source, succeeded: succeeded 
-            }, _routing_table, *rank, *self_destination)
+            respond!(drtioaux::Payload::DmaRemoveTraceReply { 
+                succeeded: succeeded 
+            })
         }
-        drtioaux::Packet::DmaPlaybackRequest { source, destination: _destination, id, timestamp } => {
-            forward!(router, _routing_table, _destination, *rank, *self_destination, _repeaters, &packet);
+        drtioaux::Payload::DmaPlaybackRequest { id, timestamp } => {
             // no DMA with a running kernel
             let succeeded = !kernelmgr.is_running() && dmamgr.playback(source, id, timestamp).is_ok();
-            router.send(drtioaux::Packet::DmaPlaybackReply { 
-                destination: source, succeeded: succeeded
-            }, _routing_table, *rank, *self_destination)
+            respond!(drtioaux::Payload::DmaPlaybackReply { 
+                succeeded: succeeded
+            })
         }
-        drtioaux::Packet::DmaPlaybackReply { destination: _destination, succeeded } => {
-            forward!(router, _routing_table, _destination, *rank, *self_destination, _repeaters, &packet);
-            if !succeeded {
-                kernelmgr.ddma_nack();
-            }
-            Ok(())
-        }
-        drtioaux::Packet::DmaPlaybackStatus { source: _, destination: _destination, id, error, channel, timestamp } => {
-            forward!(router, _routing_table, _destination, *rank, *self_destination, _repeaters, &packet);
+        drtioaux::Payload::DmaPlaybackStatus { id, error, channel, timestamp } => {
             dmamgr.remote_finished(kernelmgr, id, error, channel, timestamp);
-            Ok(())
         }
 
-        drtioaux::Packet::SubkernelAddDataRequest { destination, id, status, length, data } => {
-            forward!(router, _routing_table, destination, *rank, *self_destination, _repeaters, &packet);
-            *self_destination = destination;
+        drtioaux::Payload::SubkernelAddDataRequest { id, status, length, data } => {
             let succeeded = kernelmgr.add(id, status, &data, length as usize).is_ok();
-            drtioaux::send(0,
-                &drtioaux::Packet::SubkernelAddDataReply { succeeded: succeeded })
+            respond!(drtioaux::Payload::SubkernelAddDataReply { succeeded: succeeded })
         }
-        drtioaux::Packet::SubkernelLoadRunRequest { source, destination: _destination, id, run, timestamp } => {
-            forward!(router, _routing_table, _destination, *rank, *self_destination, _repeaters, &packet);
+        drtioaux::Payload::SubkernelLoadRunRequest { id, run } => {
             let mut succeeded = kernelmgr.load(id).is_ok();
             // allow preloading a kernel with delayed run
             if run {
@@ -445,52 +355,29 @@ fn process_aux_packet(dmamgr: &mut DmaManager, analyzer: &mut Analyzer, kernelmg
                     succeeded |= kernelmgr.run(source, id, timestamp).is_ok();
                 }
             }
-            router.send(drtioaux::Packet::SubkernelLoadRunReply { 
-                    destination: source, succeeded: succeeded 
-                }, 
-            _routing_table, *rank, *self_destination)
+            respond!(drtioaux::Payload::SubkernelLoadRunReply { succeeded: succeeded })
         }
-        drtioaux::Packet::SubkernelLoadRunReply { destination: _destination, succeeded } => {
-            forward!(router, _routing_table, _destination, *rank, *self_destination, _repeaters, &packet);
-            // received if local subkernel started another, remote subkernel
-            kernelmgr.subkernel_load_run_reply(succeeded, *self_destination);
-            Ok(())
-        }
-        drtioaux::Packet::SubkernelFinished { destination: _destination, id, with_exception, exception_src } => {
-            forward!(router, _routing_table, _destination, *rank, *self_destination, _repeaters, &packet);
+        drtioaux::Payload::SubkernelFinished { id, with_exception, exception_src } => {
             kernelmgr.remote_subkernel_finished(id, with_exception, exception_src);
-            Ok(())
         }
-        drtioaux::Packet::SubkernelExceptionRequest { source, destination: _destination } => {
-            forward!(router, _routing_table, _destination, *rank, *self_destination, _repeaters, &packet);
-            let mut data_slice: [u8; MASTER_PAYLOAD_MAX_SIZE] = [0; MASTER_PAYLOAD_MAX_SIZE];
+        drtioaux::Payload::SubkernelExceptionRequest => {
+            let mut data_slice: [u8; SAT_PAYLOAD_MAX_SIZE] = [0; SAT_PAYLOAD_MAX_SIZE];
             let meta = kernelmgr.exception_get_slice(&mut data_slice);
-            router.send(drtioaux::Packet::SubkernelException {
-                destination: source,
+            respond!(drtioaux::Payload::SubkernelException {
                 last: meta.status.is_last(),
                 length: meta.len,
                 data: data_slice,
             }, _routing_table, *rank, *self_destination)
         }
-        drtioaux::Packet::SubkernelException { destination: _destination, last, length, data } => {
-            forward!(router, _routing_table, _destination, *rank, *self_destination, _repeaters, &packet);
-            kernelmgr.received_exception(&data[..length as usize], last, router, _routing_table, *rank, *self_destination);
-            Ok(())
-        }
-        drtioaux::Packet::SubkernelMessage { source, destination: _destination, id, status, length, data } => {
-            forward!(router, _routing_table, _destination, *rank, *self_destination, _repeaters, &packet);
+        drtioaux::Payload::SubkernelMessage { id, status, length, data } => {
             kernelmgr.message_handle_incoming(status, length as usize, id, &data);
-            router.send(drtioaux::Packet::SubkernelMessageAck {
-                    destination: source
-                }, _routing_table, *rank, *self_destination)
         }
-        drtioaux::Packet::SubkernelMessageAck { destination: _destination } => {
-            forward!(router, _routing_table, _destination, *rank, *self_destination, _repeaters, &packet);
+        drtioaux::Payload::SubkernelMessageAck => {
             if kernelmgr.message_ack_slice() {
                 let mut data_slice: [u8; MASTER_PAYLOAD_MAX_SIZE] = [0; MASTER_PAYLOAD_MAX_SIZE];
                 if let Some(meta) = kernelmgr.message_get_slice(&mut data_slice) {
                     // route and not send immediately as ACKs are not a beginning of a transaction
-                    router.route(drtioaux::Packet::SubkernelMessage {
+                    router.route(drtioaux::Payload::SubkernelMessage {
                         source: *self_destination, destination: meta.destination, id: kernelmgr.get_current_id().unwrap(),
                         status: meta.status, length: meta.len as u16, data: data_slice
                     }, _routing_table, *rank, *self_destination);
@@ -501,152 +388,122 @@ fn process_aux_packet(dmamgr: &mut DmaManager, analyzer: &mut Analyzer, kernelmg
             Ok(())
         }
 
-        drtioaux::Packet::CoreMgmtGetLogRequest { destination: _destination, clear } => {
-            forward!(router, _routing_table, _destination, *rank, *self_destination, _repeaters, &packet);
-
+        drtioaux::Payload::CoreMgmtGetLogRequest { clear } => {
             let mut data_slice = [0; SAT_PAYLOAD_MAX_SIZE];
             if let Ok(meta) = coremgr.log_get_slice(&mut data_slice, clear) {
                 drtioaux::send(
                     0,
-                    &drtioaux::Packet::CoreMgmtGetLogReply {
+                    &drtioaux::Payload::CoreMgmtGetLogReply {
                         last: meta.status.is_last(),
                         length: meta.len as u16,
                         data: data_slice,
                     },
                 )
             } else {
-                drtioaux::send(0, &drtioaux::Packet::CoreMgmtReply { succeeded: false })
+                respond!(drtioaux::Payload::CoreMgmtReply { succeeded: false }, _routing_table, *rank, *self_destination)
             }
         }
-        drtioaux::Packet::CoreMgmtClearLogRequest { destination: _destination } => {
-            forward!(router, _routing_table, _destination, *rank, *self_destination, _repeaters, &packet);
-
-            drtioaux::send(0, &drtioaux::Packet::CoreMgmtReply { succeeded: mgmt::clear_log().is_ok() })
+        drtioaux::Payload::CoreMgmtClearLogRequest => {
+            respond!(&drtioaux::Payload::CoreMgmtReply { succeeded: mgmt::clear_log().is_ok() }, _routing_table, *rank, *self_destination)
         }
-        drtioaux::Packet::CoreMgmtSetLogLevelRequest {destination: _destination, log_level } => {
+        drtioaux::Payload::CoreMgmtSetLogLevelRequest { log_level } => {
             forward!(router, _routing_table, _destination, *rank, *self_destination, _repeaters, &packet);
 
             if let Ok(level_filter) = mgmt::byte_to_level_filter(log_level) {
                 info!("changing log level to {}", level_filter);
                 log::set_max_level(level_filter);
-                drtioaux::send(0, &drtioaux::Packet::CoreMgmtReply { succeeded: true })
+                respond!(drtioaux::Payload::CoreMgmtReply { succeeded: true }, _routing_table, *rank, *self_destination)
             } else {
-                drtioaux::send(0, &drtioaux::Packet::CoreMgmtReply { succeeded: false })
+                respond!(drtioaux::Payload::CoreMgmtReply { succeeded: false }, _routing_table, *rank, *self_destination)
             }
         }
-        drtioaux::Packet::CoreMgmtSetUartLogLevelRequest { destination: _destination, log_level } => {
-            forward!(router, _routing_table, _destination, *rank, *self_destination, _repeaters, &packet);
-
+        drtioaux::Payload::CoreMgmtSetUartLogLevelRequest { log_level } => {
             if let Ok(level_filter) = mgmt::byte_to_level_filter(log_level) {
                 info!("changing UART log level to {}", level_filter);
                 logger_artiq::BufferLogger::with(|logger|
                     logger.set_uart_log_level(level_filter));
-                drtioaux::send(0, &drtioaux::Packet::CoreMgmtReply { succeeded: true })
+                respond!(drtioaux::Payload::CoreMgmtReply { succeeded: true }, _routing_table, *rank, *self_destination)
             } else {
-                drtioaux::send(0, &drtioaux::Packet::CoreMgmtReply { succeeded: false })
+                respond!(drtioaux::Payload::CoreMgmtReply { succeeded: false }, _routing_table, *rank, *self_destination)
             }
         }
-        drtioaux::Packet::CoreMgmtConfigReadRequest {
-            destination: _destination,
+        drtioaux::Payload::CoreMgmtConfigReadRequest {
             length,
             key,
         } => {
-            forward!(router, _routing_table, _destination, *rank, *self_destination, _repeaters, &packet);
-
             let mut value_slice = [0; SAT_PAYLOAD_MAX_SIZE];
 
             let key_slice = &key[..length as usize];
             if !key_slice.is_ascii() {
                 error!("invalid key");
-                drtioaux::send(0, &drtioaux::Packet::CoreMgmtReply { succeeded: false })
+                respond!(drtioaux::Payload::CoreMgmtReply { succeeded: false }, _routing_table, *rank, *self_destination)
             } else {
                 let key = core::str::from_utf8(key_slice).unwrap();
                 if coremgr.fetch_config_value(key).is_ok() {
                     let meta = coremgr.get_config_value_slice(&mut value_slice);
-                    drtioaux::send(
-                        0,
-                        &drtioaux::Packet::CoreMgmtConfigReadReply {
+                    respond!(
+                        drtioaux::Payload::CoreMgmtConfigReadReply {
                             length: meta.len as u16,
                             last: meta.status.is_last(),
                             value: value_slice,
                         },
-                    )
+                    _routing_table, *rank, *self_destination)
                 } else {
-                    drtioaux::send(0, &drtioaux::Packet::CoreMgmtReply { succeeded: false })
+                    respond!(drtioaux::Payload::CoreMgmtReply { succeeded: false }, _routing_table, *rank, *self_destination)
                 }
             }
         }
-        drtioaux::Packet::CoreMgmtConfigReadContinue {
-            destination: _destination,
-        } => {
-            forward!(router, _routing_table, _destination, *rank, *self_destination, _repeaters, &packet);
-
+        drtioaux::Payload::CoreMgmtConfigReadContinue => {
             let mut value_slice = [0; SAT_PAYLOAD_MAX_SIZE];
             let meta = coremgr.get_config_value_slice(&mut value_slice);
-            drtioaux::send(
-                0,
-                &drtioaux::Packet::CoreMgmtConfigReadReply {
+            respond!(drtioaux::Payload::CoreMgmtConfigReadReply {
                     length: meta.len as u16,
                     last: meta.status.is_last(),
                     value: value_slice,
                 },
-            )
+            _routing_table, *rank, *self_destination)
         }
-        drtioaux::Packet::CoreMgmtConfigWriteRequest { destination: _destination, last, length, data }  => {
-            forward!(router, _routing_table, _destination, *rank, *self_destination, _repeaters, &packet);
-
+        drtioaux::Payload::CoreMgmtConfigWriteRequest { last, length, data }  => {
             coremgr.add_config_data(&data, length as usize);
             if last {
                 coremgr.write_config()
             } else {
-                drtioaux::send(0, &drtioaux::Packet::CoreMgmtReply { succeeded: true })
+                respond!(drtioaux::Payload::CoreMgmtReply { succeeded: true }, _routing_table, *rank, *self_destination)
             }
         }
-        drtioaux::Packet::CoreMgmtConfigRemoveRequest { destination: _destination, length, key } => {
-            forward!(router, _routing_table, _destination, *rank, *self_destination, _repeaters, &packet);
-
+        drtioaux::Payload::CoreMgmtConfigRemoveRequest { length, key } => {
             let key = core::str::from_utf8(&key[..length as usize]).unwrap();
             let succeeded = config::remove(key)
                 .map_err(|err| warn!("error on removing config: {:?}", err))
                 .is_ok();
 
-            drtioaux::send(0, &drtioaux::Packet::CoreMgmtReply { succeeded })
+            respond!(drtioaux::Payload::CoreMgmtReply { succeeded }, _routing_table, *rank, *self_destination)
         }
-        drtioaux::Packet::CoreMgmtConfigEraseRequest { destination: _destination } => {
-            forward!(router, _routing_table, _destination, *rank, *self_destination, _repeaters, &packet);
-
+        drtioaux::Payload::CoreMgmtConfigEraseRequest => {
             let succeeded = config::erase()
                 .map_err(|err| warn!("error on erasing config: {:?}", err))
                 .is_ok();
 
-            drtioaux::send(0, &drtioaux::Packet::CoreMgmtReply { succeeded })
+            respond!(drtioaux::Payload::CoreMgmtReply { succeeded }, _routing_table, *rank, *self_destination)
         }
-        drtioaux::Packet::CoreMgmtRebootRequest { destination: _destination } => {
-            forward!(router, _routing_table, _destination, *rank, *self_destination, _repeaters, &packet);
-
-            drtioaux::send(0, &drtioaux::Packet::CoreMgmtReply { succeeded: true })?;
+        drtioaux::Payload::CoreMgmtRebootRequest => {
+            respond!(drtioaux::Payload::CoreMgmtReply { succeeded: true }, _routing_table, *rank, *self_destination)?;
             warn!("restarting");
             unsafe { spiflash::reload(); }
         }
-        drtioaux::Packet::CoreMgmtFlashRequest { destination: _destination, payload_length } => {
-            forward!(router, _routing_table, _destination, *rank, *self_destination, _repeaters, &packet);
-
+        drtioaux::Payload::CoreMgmtFlashRequest { payload_length } => {
             coremgr.allocate_image_buffer(payload_length as usize);
-            drtioaux::send(0, &drtioaux::Packet::CoreMgmtReply { succeeded: true })
+            respond!(drtioaux::Payload::CoreMgmtReply { succeeded: true }, _routing_table, *rank, *self_destination)
         }
-        drtioaux::Packet::CoreMgmtFlashAddDataRequest { destination: _destination, last, length, data } => {
-            forward!(router, _routing_table, _destination, *rank, *self_destination, _repeaters, &packet);
-
+        drtioaux::Payload::CoreMgmtFlashAddDataRequest { last, length, data } => {
             coremgr.add_image_data(&data, length as usize);
             if last {
-                drtioaux::send(0, &drtioaux::Packet::CoreMgmtDropLink)
+                respond!(drtioaux::Payload::CoreMgmtDropLink, _routing_table, *rank, *self_destination)
             } else {
-                drtioaux::send(0, &drtioaux::Packet::CoreMgmtReply { succeeded: true })
+                respond!(drtioaux::Payload::CoreMgmtReply { succeeded: true }, _routing_table, *rank, *self_destination)
             }
         }
-        drtioaux::Packet::CoreMgmtDropLinkAck { destination: _destination } => {
-            forward!(router, _routing_table, _destination, *rank, *self_destination, _repeaters, &packet);
-
+        drtioaux::Payload::CoreMgmtDropLinkAck => {
             #[cfg(not(has_drtio_eem))]
             unsafe {
                 csr::gt_drtio::txenable_write(0);
@@ -664,26 +521,7 @@ fn process_aux_packet(dmamgr: &mut DmaManager, analyzer: &mut Analyzer, kernelmg
 
         _ => {
             warn!("received unexpected aux packet");
-            Ok(())
         }
-    }
-}
-
-fn process_aux_packets(dma_manager: &mut DmaManager, analyzer: &mut Analyzer,
-        kernelmgr: &mut KernelManager, coremgr: &mut CoreManager, repeaters: &mut [repeater::Repeater],
-        routing_table: &mut drtio_routing::RoutingTable, rank: &mut u8, router: &mut routing::Router,
-        destination: &mut u8) {
-    let result =
-        drtioaux::recv(0).and_then(|packet| {
-            if let Some(packet) = packet.or_else(|| router.get_local_packet()) {
-                process_aux_packet(dma_manager, analyzer, kernelmgr, coremgr,
-                    repeaters, routing_table, rank, router, destination, packet)
-            } else {
-                Ok(())
-            }
-        });
-    if let Err(e) = result {
-        warn!("aux packet error ({})", e);
     }
 }
 
@@ -987,24 +825,19 @@ fn startup() {
     let mut repeaters = [repeater::Repeater::default(); 0];
     for i in 0..repeaters.len() {
         repeaters[i] = repeater::Repeater::new(i as u8);
-    } 
-    let mut routing_table = drtio_routing::RoutingTable::default_empty();
-    let mut rank = 1;
-    let mut destination = 1;
+    }
 
     let mut hardware_tick_ts = 0;
+
+    let mut aux_mgr = aux::AuxManager::new();
 
     #[cfg(soc_platform = "efc")]
     ad9117::init().expect("AD9117 initialization failed");
     
     loop {
-        let mut router = routing::Router::new();
-
         while !drtiosat_link_rx_up() {
             drtiosat_process_errors();
-            for rep in repeaters.iter_mut() {
-                rep.service(&routing_table, rank, destination, &mut router);
-            }
+            aux_mgr.service(&mut repeaters);
             #[cfg(all(soc_platform = "kasli", hw_rev = "v2.0"))]
             {
                 io_expander0.service().expect("I2C I/O expander #0 service failed");
@@ -1040,12 +873,15 @@ fn startup() {
 
         while drtiosat_link_rx_up() {
             drtiosat_process_errors();
-            process_aux_packets(&mut dma_manager, &mut analyzer, 
-                &mut kernelmgr, &mut coremgr, &mut repeaters, &mut routing_table,
-                &mut rank, &mut router, &mut destination);
-            for rep in repeaters.iter_mut() {
-                rep.service(&routing_table, rank, destination, &mut router);
+
+            aux_mgr.service(&mut repeaters);
+            let transaction = aux_mgr.get_incoming_packet();
+            if let Some((transaction_id, source, packet)) = transaction {
+                process_aux_packet(&mut dma_manager, &mut analyzer,
+                    &mut kernelmgr, &mut repeaters, &mut aux_mgr,
+                    &packet, transaction_id, source);
             }
+
             #[cfg(all(soc_platform = "kasli", hw_rev = "v2.0"))]
             {
                 io_expander0.service().expect("I2C I/O expander #0 service failed");
@@ -1054,37 +890,15 @@ fn startup() {
             #[cfg(soc_platform = "efc")]
             io_expander.service().expect("I2C I/O expander service failed");
             hardware_tick(&mut hardware_tick_ts);
-            if drtiosat_tsc_loaded() {
-                info!("TSC loaded from uplink");
-                for rep in repeaters.iter() {
-                    if let Err(e) = rep.sync_tsc() {
-                        error!("failed to sync TSC ({})", e);
-                    }
-                }
-                if let Err(e) = drtioaux::send(0, &drtioaux::Packet::TSCAck) {
-                    error!("aux packet error: {}", e);
-                }
-            }
+            
             if let Some(status) = dma_manager.get_status() {
                 info!("playback done, error: {}, channel: {}, timestamp: {}", status.error, status.channel, status.timestamp);
-                router.route(drtioaux::Packet::DmaPlaybackStatus { 
-                    source: destination, destination: status.source, id: status.id,
-                    error: status.error, channel: status.channel, timestamp: status.timestamp 
-                }, &routing_table, rank, destination);
+                aux_mgr.transact(status.source, drtioaux::Payload::DmaPlaybackStatus { 
+                    id: status.id, error: status.error, channel: status.channel, timestamp: status.timestamp 
+                }).unwrap();
             }
 
-            kernelmgr.process_kern_requests(&mut router, &routing_table, rank, destination, &mut dma_manager);
-            
-            #[cfg(has_drtio_routing)]
-            if let Some((repno, packet)) = router.get_downstream_packet() {
-                if let Err(e) = repeaters[repno].aux_send(&packet) {
-                    warn!("[REP#{}] Error when sending packet to satellite ({:?})", repno, e)
-                }
-            }
-
-            if let Some(packet) = router.get_upstream_packet() {
-                drtioaux::send(0, &packet).unwrap();
-            }
+            kernelmgr.process_kern_requests(&mut aux_mgr, &mut dma_manager);
         }
 
         drtiosat_reset_phy(true);
