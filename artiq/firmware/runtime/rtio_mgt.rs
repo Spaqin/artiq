@@ -15,7 +15,7 @@ const ASYNC_ERROR_SEQUENCE_ERROR: u8 = 1 << 2;
 #[cfg(has_drtio)]
 pub mod drtio {
     use super::*;
-    use alloc::{vec::Vec, collections::BTreeMap};
+    use alloc::{vec::Vec, collections::BTreeMap, boxed::Box};
     use drtioaux;
     use proto_artiq::drtioaux_proto::{MASTER_PAYLOAD_MAX_SIZE, PayloadStatus};
     use rtio_dma::remote_dma;
@@ -82,6 +82,7 @@ pub mod drtio {
         Acknowledged,
         Received(drtioaux::Payload),
         TimedOut,
+        BeenRead,
     }
 
     type TransactionHandle = u8;
@@ -91,13 +92,20 @@ pub mod drtio {
     const LINK_COOLDOWN: u64 = 5;
 
     struct Transaction {
+        /* Packet to be sent */
         packet: drtioaux::Packet,
+        /* last time of sending/resending */
         last_action_time: u64,
+        /* maximum time for transaction before timeout */
         max_time: u64,
-        state: TransactionState,
+        /* transaction state, must be a RefCell to work with borrow checker */
+        state: RefCell<TransactionState>,
+        /* semaphore to wait on for other threads for transaction to end */
         semaphore: BinarySemaphore,
-        requires_response: bool,  // transactions to which normal ACK is enough
-        force_linkno: Option<u8>, // linkno not determined by routing table (reset packets need that)
+        /* false for transactions that will be satisfied with normal ACK */
+        requires_response: bool,
+        /* when linkno is not determined by routing table by destination (reset packets need that) */
+        force_linkno: Option<u8>,
     }
 
     impl Transaction {
@@ -107,7 +115,7 @@ pub mod drtio {
                 packet: packet,
                 last_action_time: last_action_time,
                 max_time: last_action_time + timeout,
-                state: TransactionState::Unsent,
+                state: RefCell::new(TransactionState::Unsent),
                 semaphore: BinarySemaphore::new(false),
                 requires_response: requires_response,
                 force_linkno: force_linkno,
@@ -115,10 +123,17 @@ pub mod drtio {
         }
 
         pub fn wait(&mut self, io: &Io) -> Result<drtioaux::Payload, Error> {
-            if self.state == TransactionState::Unsent || self.state == TransactionState::Sent || self.state == TransactionState::Acknowledged {
-                    self.semaphore.wait(io)?;
+            let need_wait = match *self.state.borrow() {
+                TransactionState::Unsent |
+                    TransactionState::Sent |
+                    TransactionState::Acknowledged => true,
+                _ => false
+            };
+            if need_wait {
+                self.semaphore.wait(io)?;
             }
-            match self.state {
+            let mut state = self.state.borrow_mut();
+            let ret = match *state {
                 TransactionState::Acknowledged => {
                     if !self.requires_response { 
                         Ok(drtioaux::Payload::PacketAck)
@@ -129,27 +144,32 @@ pub mod drtio {
                 }
                 TransactionState::Received(response) => Ok(response),
                 TransactionState::TimedOut => Err(Error::Timeout),
-                _ => Err(Error::TransactionWrongState)
-            }
+                _ => {
+                    error!("wrong state: {:?}", *state);
+                    Err(Error::TransactionWrongState)
+                }
+            };
+            *state = TransactionState::BeenRead;
+            ret
         }
 
         pub fn record_response(&mut self, response: drtioaux::Payload) {
-            if response == drtioaux::Payload::PacketAck && self.state == TransactionState::Sent {
-                self.state = TransactionState::Acknowledged;
+            let mut state = self.state.borrow_mut();
+            if response == drtioaux::Payload::PacketAck && *state == TransactionState::Sent {
+                *state = TransactionState::Acknowledged;
                 if !self.requires_response {
                     self.semaphore.signal();
                 }
-            } else if self.state == TransactionState::Sent || self.state == TransactionState::Acknowledged {
-                self.state = TransactionState::Received(response);
+            } else if *state == TransactionState::Sent || *state == TransactionState::Acknowledged {
+                *state = TransactionState::Received(response);
                 self.semaphore.signal();
             }
         }
 
         pub fn can_be_deleted(&self, current_time: u64) -> bool {
-            match self.state {
-                TransactionState::TimedOut |
-                    TransactionState::Received(_) => current_time + 2*self.max_time >= self.last_action_time,
-                TransactionState::Acknowledged => !self.requires_response && (current_time + 2*self.max_time >= self.last_action_time),
+            match *self.state.borrow() {
+                TransactionState::BeenRead => true,
+                TransactionState::Acknowledged => !self.requires_response && (current_time >= self.last_action_time + 2*DEFAULT_TIMEOUT),
                 _ => false
             }
         }
@@ -157,15 +177,16 @@ pub mod drtio {
         pub fn should_send(&mut self, current_time: u64) -> bool {
             // returns true if message needs to be sent
             // checks for timeout first
-            if (self.state == TransactionState::Unsent ||
-                    self.state == TransactionState::Sent ||
-                    self.state == TransactionState::Acknowledged) &&
+            let mut state = self.state.borrow_mut();
+            if (*state == TransactionState::Unsent ||
+                    *state == TransactionState::Sent ||
+                    *state == TransactionState::Acknowledged) &&
                     current_time > self.max_time {
-                self.state = TransactionState::TimedOut;
+                *state = TransactionState::TimedOut;
                 self.semaphore.signal();
                 false
             } else {
-                match self.state {
+                match *state {
                     TransactionState::Unsent => true,
                     TransactionState::Sent => current_time >= self.last_action_time + DEFAULT_ACK_TIMEOUT,
                     _ => false
@@ -175,17 +196,18 @@ pub mod drtio {
 
         pub fn update_last_action_time(&mut self, current_time: u64) {
             // state updated only after successful send
-            if self.state == TransactionState::Unsent {
-                self.state = TransactionState::Sent;
+            let mut state = self.state.borrow_mut();
+            if *state == TransactionState::Unsent {
+                *state = TransactionState::Sent;
                 self.last_action_time = current_time;
-            } else if self.state == TransactionState::Sent {
+            } else if *state == TransactionState::Sent {
                 self.last_action_time = current_time;
             }
         }
     }
 
     struct TransactionManager {
-        transactions: BTreeMap<u8, Transaction>,
+        transactions: [Option<Box<Transaction>>; 128],
         scheduled_acks: Vec<(TransactionHandle, u8)>,
         incoming_transactions: BTreeMap<(TransactionHandle, u8), u64>,
         routable_packets: Vec<drtioaux::Packet>,
@@ -197,7 +219,7 @@ pub mod drtio {
     impl TransactionManager {
         pub const fn new() -> TransactionManager {
             TransactionManager {
-                transactions: BTreeMap::new(),
+                transactions: [None; 128],
                 scheduled_acks: Vec::new(),
                 incoming_transactions: BTreeMap::new(),
                 routable_packets: Vec::new(),
@@ -215,34 +237,36 @@ pub mod drtio {
             timeout: u64, requires_response: bool, force_linkno: Option<u8>
         ) -> Result<drtioaux::Payload, Error> {
             let handle = self.transact_async(destination, payload, timeout, requires_response, force_linkno)?;
-            self.transactions.get_mut(&handle).unwrap().wait(io)
+            self.transactions[handle as usize].as_mut().unwrap().wait(io)
         }
 
         pub fn transact_async(&mut self, destination: u8, payload: drtioaux::Payload,
             timeout: u64, requires_response: bool, force_linkno: Option<u8>
         ) -> Result<TransactionHandle, Error> {
-            if self.transactions.len() >= 128 {
-                return Err(Error::TransactionLimitReached)
-            }
+            let mut i = 0;
             self.next_id = (self.next_id + 1) % 128;
-            while self.transactions.get(&self.next_id).is_some() {
+            while self.transactions[self.next_id as usize].is_some() && i < 128 {
                 self.next_id = (self.next_id + 1) % 128;
+                i += 1;
+            }
+            if i == 128 {
+                return Err(Error::TransactionLimitReached);
             }
             let transaction_id = self.next_id;
-            let transaction = Transaction::new(
+            let transaction = Box::new(Transaction::new(
                 drtioaux::Packet { 
                     source: self.self_destination,
                     destination: destination,
                     transaction_id: transaction_id,
                     payload: payload
-                }, timeout, requires_response, force_linkno);
+                }, timeout, requires_response, force_linkno));
             // will be dealt with by the send thread
-            self.transactions.insert(transaction_id, transaction);
+            self.transactions[transaction_id as usize] = Some(transaction);
             Ok(transaction_id)
         }
 
         pub fn await_transaction(&mut self, io: &Io, handle: TransactionHandle) -> Result<drtioaux::Payload, Error> {
-            match self.transactions.get_mut(&handle) {
+            match self.transactions[handle as usize].as_mut() {
                 Some(transaction) => transaction.wait(io),
                 None => Err(Error::TransactionDoesNotExist)
             }
@@ -251,10 +275,10 @@ pub mod drtio {
         pub fn handle_response(&mut self, io: &Io, ddma_mutex: &Mutex, 
             subkernel_mutex: &Mutex, packet: &drtioaux::Packet) {
             // ACK any response (except ACKs)
-            if packet.payload != drtioaux::Payload::PacketAck {
+            if packet.payload != drtioaux::Payload::PacketAck && packet.source != 0 {
                 self.scheduled_acks.push((packet.transaction_id, packet.source));
             }
-            let transaction = self.transactions.get_mut(&(packet.transaction_id & 0x7F));
+            let transaction = self.transactions[(packet.transaction_id & 0x7F) as usize].as_mut();
             let is_expected = packet.transaction_id & 0x80 != 0 && match transaction {
                 Some(ref transaction) => {
                     transaction.packet.destination == packet.source
@@ -318,20 +342,21 @@ pub mod drtio {
             routing_table: &drtio_routing::RoutingTable,
             link_states: &Urc<RefCell<[LinkState; csr::DRTIO.len()]>>,
             current_time: u64) {
-            self.transactions.retain(|_transaction_id, transaction| {
-                let should_send = transaction.should_send(current_time);
-                if should_send {
-                    match send(routing_table, link_states, current_time, transaction.force_linkno, &transaction.packet) {
-                        Ok(()) => transaction.update_last_action_time(current_time),
-                        Err(Error::LinkNotReady) | Err(Error::LinkDown) => (),
-                        Err(e) => warn!("error sending packet: {:?}", e)
+            for entry in self.transactions.iter_mut() {
+                if let Some(transaction) = entry {
+                    let should_send = transaction.should_send(current_time);
+                    if should_send {
+                        match send(routing_table, link_states, current_time, transaction.force_linkno, &transaction.packet) {
+                            Ok(()) => transaction.update_last_action_time(current_time),
+                            Err(Error::LinkNotReady) | Err(Error::LinkDown) => (),
+                            Err(e) => warn!("error sending packet: {:?}", e)
+                        }
+                    } else if transaction.can_be_deleted(current_time) {
+                        // clean up finished transactions to free up IDs
+                        *entry = None;
                     }
-                } else if transaction.can_be_deleted(current_time) {
-                    // clean up finished transactions to free up IDs
-                    return false;
                 }
-                true
-            });
+            }
         }
 
         pub fn recv_flush_check(&mut self) -> bool {
@@ -426,6 +451,9 @@ pub mod drtio {
             current_time: u64, force_linkno: Option<u8>, packet: &drtioaux::Packet) -> Result<(), Error> {
         let linkno = force_linkno.unwrap_or(routing_table.0[packet.destination as usize][0] - 1);
         let mut link_states = link_states.borrow_mut();
+        if linkno as usize > link_states.len() {
+            return Err(Error::TransactionFailed);
+        }
         if let LinkState::Up(time) = link_states[linkno as usize] {
             if current_time > time + LINK_COOLDOWN {
                 drtioaux::send(linkno, packet)?;
@@ -743,7 +771,7 @@ pub mod drtio {
                 }
             }
             destination_survey(&io, routing_table, link_states, up_destinations, ddma_mutex, subkernel_mutex);
-            io.sleep(200).unwrap();
+            io.sleep(20000).unwrap();
         }
     }
 
@@ -768,7 +796,7 @@ pub mod drtio {
                 handles[linkno as usize] = unsafe { TRANSACTION_MANAGER.transact_async(
                     0, 
                     drtioaux::Payload::ResetRequest, 
-                    DEFAULT_TIMEOUT, 
+                    DEFAULT_TIMEOUT,
                     false, 
                     Some(linkno)).unwrap() };
             }

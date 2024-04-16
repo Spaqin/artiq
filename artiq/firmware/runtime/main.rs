@@ -1,4 +1,4 @@
-#![feature(lang_items, panic_info_message, const_btree_new, btree_retain, iter_advance_by, never_type)]
+#![feature(lang_items, panic_info_message, const_btree_new, btree_retain, iter_advance_by, never_type, const_in_array_repeat_expressions)]
 #![no_std]
 
 extern crate dyld;
