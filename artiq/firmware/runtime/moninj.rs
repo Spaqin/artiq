@@ -50,12 +50,11 @@ mod local_moninj {
 #[cfg(has_drtio)]
 mod remote_moninj {
     use drtioaux;
-    use drtio_routing;
     use rtio_mgt::drtio;
     use sched::Io;
 
     pub fn read_probe(io: &Io, destination: u8, channel: u16, probe: u8) -> u64 {
-        let reply = drtio::aux_transact(io, destination, drtio::DEFAULT_TIMEOUT, true,
+        let reply = drtio::aux_transact(io, destination,
             drtioaux::Payload::MonitorRequest { 
                 channel: channel,
                 probe: probe
@@ -69,7 +68,7 @@ mod remote_moninj {
     }
 
     pub fn inject(_io: &Io, destination: u8, channel: u16, overrd: u8, value: u8) {
-        drtio::async_aux_transact(destination, drtio::DEFAULT_TIMEOUT, false,
+        drtio::async_aux_transact(destination,
             drtioaux::Payload::InjectionRequest {
             channel: channel,
             overrd: overrd,
@@ -78,7 +77,7 @@ mod remote_moninj {
     }
 
     pub fn read_injection_status(io: &Io, destination: u8, channel: u16, overrd: u8) -> u8 {
-        let reply = drtio::aux_transact(io, destination, drtio::DEFAULT_TIMEOUT, true,
+        let reply = drtio::aux_transact(io, destination,
             drtioaux::Payload::InjectionStatusRequest {
                 channel: channel,
                 overrd: overrd

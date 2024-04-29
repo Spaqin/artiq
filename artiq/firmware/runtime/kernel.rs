@@ -436,7 +436,7 @@ pub mod subkernel {
 
     pub fn subkernel_upload(io: &Io, id: u32, destination: u8, data: &Vec<u8>) -> Result<(), Error> {
         drtio::partition_data(data, |slice, status, len: usize| {
-            let reply = drtio::aux_transact(io, destination, drtio::DEFAULT_TIMEOUT, true,
+            let reply = drtio::aux_transact(io, destination,
                 Payload::SubkernelAddDataRequest {
                     id: id, status: status, length: len as u16, data: *slice})?;
             match reply {
@@ -454,7 +454,7 @@ pub mod subkernel {
     }
 
     pub fn subkernel_load(io: &Io, id: u32, destination: u8, run: bool) -> Result<(), Error> {
-        let reply = drtio::aux_transact(io, destination, drtio::DEFAULT_TIMEOUT, true,
+        let reply = drtio::aux_transact(io, destination,
             Payload::SubkernelLoadRunRequest { id: id, run: run })?;
         match reply {
             Payload::SubkernelLoadRunReply { succeeded: true } => Ok(()),
@@ -467,7 +467,7 @@ pub mod subkernel {
     pub fn retrieve_exception(io: &Io, destination: u8) -> Result<Vec<u8>, Error> {
         let mut remote_data: Vec<u8> = Vec::new();
         loop {
-            let reply = drtio::aux_transact(io, destination, drtio::DEFAULT_TIMEOUT, true,
+            let reply = drtio::aux_transact(io, destination,
                 Payload::SubkernelExceptionRequest)?;
             match reply {
                 Payload::SubkernelException { last, length, data } => { 
@@ -483,11 +483,11 @@ pub mod subkernel {
 
     pub fn drtio_send_message(io: &Io, id: u32, destination: u8, message: &[u8]) -> Result<(), Error> {
         drtio::partition_data(message, |slice, status, len: usize| {
-            let reply = drtio::aux_transact(io, destination, drtio::DEFAULT_TIMEOUT, false,
+            let reply = drtio::aux_transact(io, destination,
                 Payload::SubkernelMessage {
                     id: id, status: status, length: len as u16, data: *slice})?;
             match reply {
-                Payload::PacketAck => Ok(()),
+                Payload::SubkernelMessageAck => Ok(()),
                 packet => Err(drtio::Error::UnexpectedPacket(packet)),
             }
         })?;

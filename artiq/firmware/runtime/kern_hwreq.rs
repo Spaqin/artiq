@@ -11,12 +11,11 @@ use board_artiq::spi as local_spi;
 #[cfg(has_drtio)]
 mod remote_i2c {
     use drtioaux;
-    use drtio_routing;
     use rtio_mgt::drtio;
     use sched::Io;
 
     pub fn start(io: &Io, destination: u8, busno: u8) -> Result<(), &'static str> {
-        let reply = drtio::aux_transact(io, destination, drtio::DEFAULT_TIMEOUT, true, 
+        let reply = drtio::aux_transact(io, destination,  
             drtioaux::Payload::I2cStartRequest {
                 busno: busno
             });
@@ -36,7 +35,7 @@ mod remote_i2c {
     }
 
     pub fn restart(io: &Io, destination: u8, busno: u8) -> Result<(), &'static str> {
-        let reply = drtio::aux_transact(io, destination, drtio::DEFAULT_TIMEOUT, true,
+        let reply = drtio::aux_transact(io, destination, 
             drtioaux::Payload::I2cRestartRequest {
                 busno: busno
             });
@@ -56,7 +55,7 @@ mod remote_i2c {
     }
 
     pub fn stop(io: &Io, destination: u8, busno: u8) -> Result<(), &'static str> {
-        let reply = drtio::aux_transact(io, destination, drtio::DEFAULT_TIMEOUT, true,
+        let reply = drtio::aux_transact(io, destination, 
             drtioaux::Payload::I2cStopRequest  {
                 busno: busno
             });
@@ -76,7 +75,7 @@ mod remote_i2c {
     }
 
     pub fn write(io: &Io, destination: u8, busno: u8, data: u8) -> Result<bool, &'static str> {
-        let reply = drtio::aux_transact(io, destination, drtio::DEFAULT_TIMEOUT, true, 
+        let reply = drtio::aux_transact(io, destination,  
             drtioaux::Payload::I2cWriteRequest {
                 busno: busno,
                 data: data
@@ -97,7 +96,7 @@ mod remote_i2c {
     }
 
     pub fn read(io: &Io, destination: u8, busno: u8, ack: bool) -> Result<u8, &'static str> {
-        let reply = drtio::aux_transact(io, destination, drtio::DEFAULT_TIMEOUT, true,
+        let reply = drtio::aux_transact(io, destination, 
             drtioaux::Payload::I2cReadRequest {
                 busno: busno,
                 ack: ack
@@ -119,7 +118,7 @@ mod remote_i2c {
 
     pub fn switch_select(io: &Io, destination: u8, busno: u8, 
         address: u8, mask: u8) -> Result<(), &'static str> {
-        let reply = drtio::aux_transact(io, destination, drtio::DEFAULT_TIMEOUT, true,
+        let reply = drtio::aux_transact(io, destination, 
             drtioaux::Payload::I2cSwitchSelectRequest {
                 busno: busno,
                 address: address,
@@ -144,14 +143,13 @@ mod remote_i2c {
 #[cfg(has_drtio)]
 mod remote_spi {
     use drtioaux;
-    use drtio_routing;
     use rtio_mgt::drtio;
     use sched::Io;
 
     pub fn set_config(io: &Io, destination: u8,
         busno: u8, flags: u8, length: u8, div: u8, cs: u8
     ) -> Result<(), ()> {
-        let reply = drtio::aux_transact(io, destination, drtio::DEFAULT_TIMEOUT, true,
+        let reply = drtio::aux_transact(io, destination,
             drtioaux::Payload::SpiSetConfigRequest {
             busno: busno,
             flags: flags,
@@ -175,7 +173,7 @@ mod remote_spi {
     }
 
     pub fn write(io: &Io, destination: u8, busno: u8, data: u32) -> Result<(), ()> {
-        let reply = drtio::aux_transact(io, destination, drtio::DEFAULT_TIMEOUT, true,
+        let reply = drtio::aux_transact(io, destination,
             drtioaux::Payload::SpiWriteRequest {
                 busno: busno,
                 data: data
@@ -197,7 +195,7 @@ mod remote_spi {
 
     pub fn read(io: &Io, destination: u8, busno: u8
     ) -> Result<u32, ()> {
-        let reply = drtio::aux_transact(io, destination, drtio::DEFAULT_TIMEOUT, true,
+        let reply = drtio::aux_transact(io, destination,
             drtioaux::Payload::SpiReadRequest {
                 busno: busno
             });

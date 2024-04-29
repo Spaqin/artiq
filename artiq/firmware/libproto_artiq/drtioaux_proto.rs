@@ -97,7 +97,6 @@ pub enum Payload {
     ResetRequest,
     ResetAck,
     TSCAck,
-    PacketAck,
 
     DestinationStatusRequest,
     DestinationDownReply,
@@ -156,6 +155,7 @@ pub enum Payload {
     SubkernelExceptionRequest,
     SubkernelException { last: bool, length: u16, data: [u8; SAT_PAYLOAD_MAX_SIZE] },
     SubkernelMessage { id: u32, status: PayloadStatus, length: u16, data: [u8; MASTER_PAYLOAD_MAX_SIZE] },
+    SubkernelMessageAck,
 }
 
 impl Payload {
@@ -168,7 +168,6 @@ impl Payload {
             0x02 => Payload::ResetRequest,
             0x03 => Payload::ResetAck,
             0x04 => Payload::TSCAck,
-            0x05 => Payload::PacketAck,
 
             0x20 => Payload::DestinationStatusRequest,
             0x21 => Payload::DestinationDownReply,
@@ -195,7 +194,7 @@ impl Payload {
             0x31 => Payload::RoutingSetRank {
                 rank: reader.read_u8()?
             },
-            0x32 => Packet::RoutingAck,
+            0x32 => Payload::RoutingAck,
 
             0x40 => Payload::MonitorRequest {
                 channel: reader.read_u16()?,
@@ -383,6 +382,7 @@ impl Payload {
                     data: data,
                 }
             },
+            0xcc => Payload::SubkernelMessageAck,
 
             ty => return Err(Error::UnknownPacket(ty))
         })
@@ -402,8 +402,6 @@ impl Payload {
                 writer.write_u8(0x03)?,
             Payload::TSCAck =>
                 writer.write_u8(0x04)?,
-            Payload::PacketAck =>
-                writer.write_u8(0x05)?,
 
             Payload::DestinationStatusRequest => 
                 writer.write_u8(0x20)?,
@@ -628,6 +626,7 @@ impl Payload {
                 writer.write_u16(length)?;
                 writer.write_all(&data[0..length as usize])?;
             },
+            Payload::SubkernelMessageAck => writer.write_u8(0xcc)?,
         }
         Ok(())
     }

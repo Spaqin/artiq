@@ -488,7 +488,7 @@ fn process_host_message(io: &Io, _ddma_mutex: &Mutex, _subkernel_mutex: &Mutex,
 
 fn process_kern_message(io: &Io, routing_table: &drtio_routing::RoutingTable,
                         up_destinations: &Urc<RefCell<[bool; drtio_routing::DEST_COUNT]>>,
-                        ddma_mutex: &Mutex, subkernel_mutex: &Mutex, mut stream: Option<&mut TcpStream>,
+                        ddma_mutex: &Mutex, _subkernel_mutex: &Mutex, mut stream: Option<&mut TcpStream>,
                         session: &mut Session) -> Result<bool, Error<SchedError>> {
     kern_recv_notrace(io, |request| {
         match (request, session.kernel_state) {
@@ -632,7 +632,7 @@ fn process_kern_message(io: &Io, routing_table: &drtio_routing::RoutingTable,
                 session.kernel_state = KernelState::Absent;
                 unsafe { session.congress.cache.unborrow() }
                 #[cfg(has_drtio)]
-                subkernel::clear_subkernels(io, subkernel_mutex)?;
+                subkernel::clear_subkernels(io, _subkernel_mutex)?;
 
                 match stream {
                     None => return Ok(true),
@@ -651,7 +651,7 @@ fn process_kern_message(io: &Io, routing_table: &drtio_routing::RoutingTable,
                 session.kernel_state = KernelState::Absent;
                 unsafe { session.congress.cache.unborrow() }
                 #[cfg(has_drtio)]
-                subkernel::clear_subkernels(io, subkernel_mutex)?;
+                subkernel::clear_subkernels(io, _subkernel_mutex)?;
 
                 match stream {
                     None => {
@@ -708,7 +708,7 @@ fn process_kern_message(io: &Io, routing_table: &drtio_routing::RoutingTable,
             }
             #[cfg(has_drtio)]
             &kern::SubkernelMsgRecvRequest { id, timeout, tags } => {
-                let message_received = subkernel::message_await(io, subkernel_mutex, id as u32, timeout);
+                let message_received = subkernel::message_await(io, _subkernel_mutex, id as u32, timeout);
                 let (status, count) = match message_received {
                     Ok(ref message) => (kern::SubkernelStatus::NoError, message.count),
                     Err(SubkernelError::Timeout) => (kern::SubkernelStatus::Timeout, 0),
