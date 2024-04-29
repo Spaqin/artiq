@@ -15,7 +15,7 @@ const ASYNC_ERROR_SEQUENCE_ERROR: u8 = 1 << 2;
 #[cfg(has_drtio)]
 pub mod drtio {
     use super::*;
-    use alloc::{vec::Vec, collections::BTreeMap, boxed::Box};
+    use alloc::{vec::Vec, boxed::Box};
     use drtioaux;
     use proto_artiq::drtioaux_proto::{MASTER_PAYLOAD_MAX_SIZE, PayloadStatus};
     use rtio_dma::remote_dma;
@@ -32,8 +32,6 @@ pub mod drtio {
         AuxError(drtioaux::Error<!>),
         #[fail(display = "link down")]
         LinkDown,
-        #[fail(display = "link not ready")]
-        LinkNotReady,
         #[fail(display = "unexpected reply")]
         UnexpectedReply,
         #[fail(display = "sched error: {}", _0)]
@@ -60,21 +58,6 @@ pub mod drtio {
         }
     }
 
-    #[derive(PartialEq, Clone, Copy, Debug)]
-    enum LinkState {
-        Down,
-        Up(u64)
-    }
-
-    impl LinkState {
-        fn is_up(&self) -> bool {
-            match self {
-                LinkState::Up(_) => true,
-                _ => false
-            }
-        }
-    }
-
     #[derive(PartialEq, Debug)]
     enum TransactionState {
         Unsent,
@@ -87,7 +70,6 @@ pub mod drtio {
     type TransactionHandle = u8;
 
     pub const DEFAULT_TIMEOUT: u64 = 200;
-    const LINK_COOLDOWN: u64 = 5;
 
     struct Transaction {
         /* Packet to be sent */
@@ -279,12 +261,12 @@ pub mod drtio {
         }
 
         pub fn send_routable_packet(&mut self, routing_table: &drtio_routing::RoutingTable, 
-            link_states: &Urc<RefCell<[LinkState; csr::DRTIO.len()]>>, current_time: u64) {
+            link_states: &Urc<RefCell<[bool; csr::DRTIO.len()]>>) {
             self.routable_packets.retain(|packet| {
-                match send(routing_table, link_states, current_time, None, packet) {
+                match send(routing_table, link_states, None, packet) {
                     Ok(()) => false,
                     // routable packet is also discarded if link is down
-                    Err(Error::LinkNotReady) | Err(Error::LinkDown) => false,
+                    Err(Error::LinkDown) => false,
                     Err(e) => { warn!("error rerouting packet: {:?}", e); true }
                 }
             });
@@ -292,15 +274,15 @@ pub mod drtio {
 
         pub fn handle_transactions(&mut self, 
             routing_table: &drtio_routing::RoutingTable,
-            link_states: &Urc<RefCell<[LinkState; csr::DRTIO.len()]>>,
+            link_states: &Urc<RefCell<[bool; csr::DRTIO.len()]>>,
             current_time: u64) {
             for entry in self.transactions.iter_mut() {
                 if let Some(transaction) = entry {
                     let should_send = transaction.should_send(current_time);
                     if should_send {
-                        match send(routing_table, link_states, current_time, transaction.force_linkno, &transaction.packet) {
+                        match send(routing_table, link_states, transaction.force_linkno, &transaction.packet) {
                             Ok(()) => transaction.update_last_action_time(current_time),
-                            Err(Error::LinkNotReady) | Err(Error::LinkDown) => (),
+                            Err(Error::LinkDown) => (),
                             Err(e) => warn!("error sending packet: {:?}", e)
                         }
                     } else if transaction.can_be_deleted(current_time) {
@@ -339,7 +321,7 @@ pub mod drtio {
             up_destinations: &Urc<RefCell<[bool; drtio_routing::DEST_COUNT]>>,
             ddma_mutex: &Mutex, subkernel_mutex: &Mutex) {
         let link_states = Urc::new(RefCell::new(
-            [LinkState::Down; csr::DRTIO.len()]));
+            [false; csr::DRTIO.len()]));
         {
             let self_destination = routing_table.borrow().determine_self_destination();
             unsafe { TRANSACTION_MANAGER.set_self_destination(self_destination) }
@@ -371,10 +353,10 @@ pub mod drtio {
         }
     }
 
-    fn recv_thread(io: Io, ddma_mutex: &Mutex, subkernel_mutex: &Mutex, link_states: &Urc<RefCell<[LinkState; csr::DRTIO.len()]>>) {
+    fn recv_thread(io: Io, ddma_mutex: &Mutex, subkernel_mutex: &Mutex, link_states: &Urc<RefCell<[bool; csr::DRTIO.len()]>>) {
         loop {
             for linkno in 0..csr::DRTIO.len() {
-                if !link_states.borrow()[linkno].is_up() {
+                if !link_states.borrow()[linkno] {
                     continue;
                 }
                 let res = drtioaux::recv(linkno as u8);
@@ -399,33 +381,28 @@ pub mod drtio {
     }
 
     fn send(routing_table: &drtio_routing::RoutingTable, 
-            link_states: &Urc<RefCell<[LinkState; csr::DRTIO.len()]>>, 
-            current_time: u64, force_linkno: Option<u8>, packet: &drtioaux::Packet) -> Result<(), Error> {
+            link_states: &Urc<RefCell<[bool; csr::DRTIO.len()]>>, 
+            force_linkno: Option<u8>, packet: &drtioaux::Packet) -> Result<(), Error> {
         let linkno = force_linkno.unwrap_or(routing_table.0[packet.destination as usize][0] - 1);
-        let mut link_states = link_states.borrow_mut();
+        let link_states = link_states.borrow_mut();
         if linkno as usize > link_states.len() {
             return Err(Error::TransactionFailed);
         }
-        if let LinkState::Up(time) = link_states[linkno as usize] {
-            if current_time > time + LINK_COOLDOWN {
-                drtioaux::send(linkno, packet)?;
-                link_states[linkno as usize] = LinkState::Up(current_time);
-                Ok(())
-            } else {
-                Err(Error::LinkNotReady)
-            }
+        if link_states[linkno as usize] {
+            drtioaux::send(linkno, packet)?;
+            Ok(())
         } else {
             Err(Error::LinkDown)
         }
     }
 
-    fn send_thread(io: Io, routing_table: &drtio_routing::RoutingTable, link_states: &Urc<RefCell<[LinkState; csr::DRTIO.len()]>>) {
+    fn send_thread(io: Io, routing_table: &drtio_routing::RoutingTable, link_states: &Urc<RefCell<[bool; csr::DRTIO.len()]>>) {
         loop {
             io.relinquish().unwrap();
             let current_time = clock::get_ms();
             unsafe {
                 // reroute packets
-                TRANSACTION_MANAGER.send_routable_packet(routing_table, link_states, current_time);
+                TRANSACTION_MANAGER.send_routable_packet(routing_table, link_states);
                 // outgoing transactions
                 TRANSACTION_MANAGER.handle_transactions(routing_table, link_states, current_time);
             }
@@ -607,7 +584,7 @@ pub mod drtio {
     }
 
     fn destination_survey(io: &Io, routing_table: &drtio_routing::RoutingTable,
-            link_states: &Urc<RefCell<[LinkState; csr::DRTIO.len()]>>,
+            link_states: &Urc<RefCell<[bool; csr::DRTIO.len()]>>,
             up_destinations: &Urc<RefCell<[bool; drtio_routing::DEST_COUNT]>>,
             ddma_mutex: &Mutex, subkernel_mutex: &Mutex) {
         for destination in 0..drtio_routing::DEST_COUNT {
@@ -622,7 +599,7 @@ pub mod drtio {
             } else if hop as usize <= csr::DRTIO.len() {
                 let linkno = hop - 1;
                 if destination_up(up_destinations, destination) {
-                    let link_up = link_states.borrow()[linkno as usize].is_up();
+                    let link_up = link_states.borrow()[linkno as usize];
                     if link_up {
                         // eventually todo: schedule transactions first, then get results
                         let reply = aux_transact(io, destination,
@@ -658,7 +635,7 @@ pub mod drtio {
                         remote_dma::destination_changed(io, ddma_mutex, destination, false);
                         subkernel::destination_changed(io, subkernel_mutex, destination, false);
                     }
-                } else if link_states.borrow()[linkno as usize].is_up() {
+                } else if link_states.borrow()[linkno as usize] {
                     let reply = aux_transact(io, destination,
                         drtioaux::Payload::DestinationStatusRequest);
                     match reply {
@@ -678,20 +655,20 @@ pub mod drtio {
     }
 
     fn link_thread(io: Io, routing_table: &drtio_routing::RoutingTable,
-            link_states: &Urc<RefCell<[LinkState; csr::DRTIO.len()]>>,
+            link_states: &Urc<RefCell<[bool; csr::DRTIO.len()]>>,
             up_destinations: &Urc<RefCell<[bool; drtio_routing::DEST_COUNT]>>,
             ddma_mutex: &Mutex, subkernel_mutex: &Mutex) {
         loop {
             for linkno in 0..csr::DRTIO.len() {
                 let linkno = linkno as u8;
-                let link_up = link_states.borrow()[linkno as usize].is_up();
+                let link_up = link_states.borrow()[linkno as usize];
                 if link_up {
                     /* link was previously up */
                     if link_rx_up(linkno) {
                         process_local_errors(linkno);
                     } else {
                         info!("[LINK#{}] link is down", linkno);
-                        link_states.borrow_mut()[linkno as usize] = LinkState::Down;
+                        link_states.borrow_mut()[linkno as usize] = false;
                     }
                 } else {
                     /* link was previously down */
@@ -709,7 +686,7 @@ pub mod drtio {
                             if let Err(e) = set_rank(&io, linkno, 1) {
                                 error!("[LINK#{}] failed to set rank ({:?})", linkno, e);
                             }
-                            link_states.borrow_mut()[linkno as usize] = LinkState::Up(clock::get_ms());
+                            link_states.borrow_mut()[linkno as usize] = true;
                             info!("[LINK#{}] link initialization completed", linkno);
                         } else {
                             error!("[LINK#{}] ping failed", linkno);
