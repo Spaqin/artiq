@@ -437,7 +437,7 @@ pub mod subkernel {
     pub fn subkernel_upload(io: &Io, id: u32, destination: u8, data: &Vec<u8>) -> Result<(), Error> {
         drtio::partition_data(data, |slice, status, len: usize| {
             let reply = drtio::aux_transact(io, destination,
-                Payload::SubkernelAddDataRequest {
+                &Payload::SubkernelAddDataRequest {
                     id: id, status: status, length: len as u16, data: *slice})?;
             match reply {
                 Payload::SubkernelAddDataReply { succeeded: true } => Ok(()),
@@ -455,7 +455,7 @@ pub mod subkernel {
 
     pub fn subkernel_load(io: &Io, id: u32, destination: u8, run: bool) -> Result<(), Error> {
         let reply = drtio::aux_transact(io, destination,
-            Payload::SubkernelLoadRunRequest { id: id, run: run })?;
+            &Payload::SubkernelLoadRunRequest { id: id, run: run })?;
         match reply {
             Payload::SubkernelLoadRunReply { succeeded: true } => Ok(()),
             Payload::SubkernelLoadRunReply { succeeded: false } =>
@@ -468,7 +468,7 @@ pub mod subkernel {
         let mut remote_data: Vec<u8> = Vec::new();
         loop {
             let reply = drtio::aux_transact(io, destination,
-                Payload::SubkernelExceptionRequest)?;
+                &Payload::SubkernelExceptionRequest)?;
             match reply {
                 Payload::SubkernelException { last, length, data } => { 
                     remote_data.extend(&data[0..length as usize]);
@@ -484,7 +484,7 @@ pub mod subkernel {
     pub fn drtio_send_message(io: &Io, id: u32, destination: u8, message: &[u8]) -> Result<(), Error> {
         drtio::partition_data(message, |slice, status, len: usize| {
             let reply = drtio::aux_transact(io, destination,
-                Payload::SubkernelMessage {
+                &Payload::SubkernelMessage {
                     id: id, status: status, length: len as u16, data: *slice})?;
             match reply {
                 Payload::SubkernelMessageAck => Ok(()),

@@ -191,13 +191,13 @@ pub mod drtio {
             self.self_destination = dest;
         }
 
-        pub fn transact(&mut self, io: &Io, destination: u8, payload: drtioaux::Payload, force_linkno: Option<u8>
+        pub fn transact(&mut self, io: &Io, destination: u8, payload: &drtioaux::Payload, force_linkno: Option<u8>
         ) -> Result<drtioaux::Payload, Error> {
             let handle = self.transact_async(destination, payload, force_linkno)?;
             self.transactions[handle as usize].as_mut().unwrap().wait(io)
         }
 
-        pub fn transact_async(&mut self, destination: u8, payload: drtioaux::Payload, force_linkno: Option<u8>
+        pub fn transact_async(&mut self, destination: u8, payload: &drtioaux::Payload, force_linkno: Option<u8>
         ) -> Result<TransactionHandle, Error> {
             let mut i = 0;
             self.next_id = (self.next_id + 1) % 128;
@@ -214,7 +214,7 @@ pub mod drtio {
                     source: self.self_destination,
                     destination: destination,
                     transaction_id: transaction_id,
-                    payload: payload
+                    payload: *payload
                 }, force_linkno));
             // will be dealt with by the send thread
             self.transactions[transaction_id as usize] = Some(transaction);
@@ -409,11 +409,11 @@ pub mod drtio {
         }
     }
 
-    pub fn aux_transact(io: &Io, destination: u8, payload: drtioaux::Payload) -> Result<drtioaux::Payload, Error> {
+    pub fn aux_transact(io: &Io, destination: u8, payload: &drtioaux::Payload) -> Result<drtioaux::Payload, Error> {
         unsafe { TRANSACTION_MANAGER.transact(io, destination, payload, None) }
     }
 
-    pub fn async_aux_transact(destination: u8, payload: drtioaux::Payload) -> TransactionHandle {
+    pub fn async_aux_transact(destination: u8, payload: &drtioaux::Payload) -> TransactionHandle {
         unsafe { TRANSACTION_MANAGER.transact_async(destination, payload, None).unwrap() }
     }
 
@@ -603,7 +603,7 @@ pub mod drtio {
                     if link_up {
                         // eventually todo: schedule transactions first, then get results
                         let reply = aux_transact(io, destination,
-                            drtioaux::Payload::DestinationStatusRequest);
+                            &drtioaux::Payload::DestinationStatusRequest);
                         if let Ok(reply) = reply {
                             match reply {
                                 drtioaux::Payload::DestinationDownReply => {
@@ -637,7 +637,7 @@ pub mod drtio {
                     }
                 } else if link_states.borrow()[linkno as usize] {
                     let reply = aux_transact(io, destination,
-                        drtioaux::Payload::DestinationStatusRequest);
+                        &drtioaux::Payload::DestinationStatusRequest);
                     match reply {
                         Ok(drtioaux::Payload::DestinationDownReply) => (),
                         Ok(drtioaux::Payload::DestinationOkReply) => {
@@ -719,7 +719,7 @@ pub mod drtio {
                 // schedule resets first
                 handles[linkno as usize] = unsafe { TRANSACTION_MANAGER.transact_async(
                     0, 
-                    drtioaux::Payload::ResetRequest,
+                    &drtioaux::Payload::ResetRequest,
                     Some(linkno)).unwrap() };
             }
         }

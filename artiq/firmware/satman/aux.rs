@@ -1,4 +1,4 @@
-use alloc::{collections::BTreeMap, vec::Vec};
+use alloc::{boxed::Box, collections::BTreeMap, vec::Vec};
 use core::{cmp::min, cell::RefCell};
 use board_misoc::{csr, clock};
 use board_artiq::{drtioaux, drtio_routing};
@@ -203,7 +203,7 @@ enum UpstreamState {
 }
 
 pub struct AuxManager {
-    incoming_transactions: BTreeMap<(TransactionHandle, u8), IncomingTransaction>,
+    incoming_transactions: [Option<Box<Transaction>>; 128],
     scheduled_acks: Vec<(TransactionHandle, u8)>,
     outgoing_transactions: BTreeMap<TransactionHandle, OutgoingTransaction>,
     routable_packets: Vec<drtioaux::Packet>,
@@ -217,7 +217,7 @@ pub struct AuxManager {
 impl AuxManager {
     pub fn new() -> AuxManager {
         AuxManager {
-            incoming_transactions: BTreeMap::new(),
+            incoming_transactions: [None; 128],
             scheduled_acks: Vec::new(),
             outgoing_transactions: BTreeMap::new(),
             routable_packets: Vec::new(),

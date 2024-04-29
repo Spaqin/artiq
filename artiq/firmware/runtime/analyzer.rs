@@ -78,7 +78,7 @@ pub mod remote_analyzer {
         }
 
     fn download_data(io: &Io, destination: u8) -> Result<RemoteBuffer, drtio::Error> {
-        let reply = drtio::aux_transact(io, destination, drtioaux::Payload::AnalyzerHeaderRequest)?;
+        let reply = drtio::aux_transact(io, destination, &drtioaux::Payload::AnalyzerHeaderRequest)?;
         let (sent, total, overflow) = match reply {
             drtioaux::Payload::AnalyzerHeader { sent_bytes, total_byte_count, overflow_occurred } => 
                 (sent_bytes, total_byte_count, overflow_occurred),
@@ -89,7 +89,7 @@ pub mod remote_analyzer {
         if sent > 0 {
             let mut last_packet = false;
             while !last_packet {
-                let reply = drtio::aux_transact(io, destination, drtioaux::Payload::AnalyzerDataRequest)?;
+                let reply = drtio::aux_transact(io, destination, &drtioaux::Payload::AnalyzerDataRequest)?;
                 match reply {
                     drtioaux::Payload::AnalyzerData { last, length, data } => { 
                         last_packet = last;

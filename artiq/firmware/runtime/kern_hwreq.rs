@@ -16,7 +16,7 @@ mod remote_i2c {
 
     pub fn start(io: &Io, destination: u8, busno: u8) -> Result<(), &'static str> {
         let reply = drtio::aux_transact(io, destination,  
-            drtioaux::Payload::I2cStartRequest {
+            &drtioaux::Payload::I2cStartRequest {
                 busno: busno
             });
         match reply {
@@ -36,7 +36,7 @@ mod remote_i2c {
 
     pub fn restart(io: &Io, destination: u8, busno: u8) -> Result<(), &'static str> {
         let reply = drtio::aux_transact(io, destination, 
-            drtioaux::Payload::I2cRestartRequest {
+            &drtioaux::Payload::I2cRestartRequest {
                 busno: busno
             });
         match reply {
@@ -56,7 +56,7 @@ mod remote_i2c {
 
     pub fn stop(io: &Io, destination: u8, busno: u8) -> Result<(), &'static str> {
         let reply = drtio::aux_transact(io, destination, 
-            drtioaux::Payload::I2cStopRequest  {
+            &drtioaux::Payload::I2cStopRequest  {
                 busno: busno
             });
         match reply {
@@ -76,7 +76,7 @@ mod remote_i2c {
 
     pub fn write(io: &Io, destination: u8, busno: u8, data: u8) -> Result<bool, &'static str> {
         let reply = drtio::aux_transact(io, destination,  
-            drtioaux::Payload::I2cWriteRequest {
+            &drtioaux::Payload::I2cWriteRequest {
                 busno: busno,
                 data: data
             });
@@ -97,7 +97,7 @@ mod remote_i2c {
 
     pub fn read(io: &Io, destination: u8, busno: u8, ack: bool) -> Result<u8, &'static str> {
         let reply = drtio::aux_transact(io, destination, 
-            drtioaux::Payload::I2cReadRequest {
+            &drtioaux::Payload::I2cReadRequest {
                 busno: busno,
                 ack: ack
             });
@@ -119,7 +119,7 @@ mod remote_i2c {
     pub fn switch_select(io: &Io, destination: u8, busno: u8, 
         address: u8, mask: u8) -> Result<(), &'static str> {
         let reply = drtio::aux_transact(io, destination, 
-            drtioaux::Payload::I2cSwitchSelectRequest {
+            &drtioaux::Payload::I2cSwitchSelectRequest {
                 busno: busno,
                 address: address,
                 mask: mask,
@@ -150,7 +150,7 @@ mod remote_spi {
         busno: u8, flags: u8, length: u8, div: u8, cs: u8
     ) -> Result<(), ()> {
         let reply = drtio::aux_transact(io, destination,
-            drtioaux::Payload::SpiSetConfigRequest {
+            &drtioaux::Payload::SpiSetConfigRequest {
             busno: busno,
             flags: flags,
             length: length,
@@ -174,7 +174,7 @@ mod remote_spi {
 
     pub fn write(io: &Io, destination: u8, busno: u8, data: u32) -> Result<(), ()> {
         let reply = drtio::aux_transact(io, destination,
-            drtioaux::Payload::SpiWriteRequest {
+            &drtioaux::Payload::SpiWriteRequest {
                 busno: busno,
                 data: data
         });
@@ -196,7 +196,7 @@ mod remote_spi {
     pub fn read(io: &Io, destination: u8, busno: u8
     ) -> Result<u32, ()> {
         let reply = drtio::aux_transact(io, destination,
-            drtioaux::Payload::SpiReadRequest {
+            &drtioaux::Payload::SpiReadRequest {
                 busno: busno
             });
         match reply {

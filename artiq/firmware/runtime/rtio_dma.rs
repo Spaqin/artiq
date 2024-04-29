@@ -209,7 +209,7 @@ pub mod remote_dma {
     pub fn upload_trace(io: &Io, id: u32, destination: u8, trace: &[u8]) -> Result<(), Error> {
         drtio::partition_data(trace, |slice, status, len: usize| {
             let reply = drtio::aux_transact(io, destination,
-                Payload::DmaAddTraceRequest {
+                &Payload::DmaAddTraceRequest {
                     id: id, status: status, length: len as u16, trace: *slice})?;
             match reply {
                 Payload::DmaAddTraceReply { succeeded: true, .. } => Ok(()),
@@ -226,7 +226,7 @@ pub mod remote_dma {
 
     pub fn send_erase(io: &Io, id: u32, destination: u8) -> Result<(), Error> {
         let reply = drtio::aux_transact(io, destination,
-            Payload::DmaRemoveTraceRequest { id: id })?;
+            &Payload::DmaRemoveTraceRequest { id: id })?;
         match reply {
             Payload::DmaRemoveTraceReply { succeeded: true } => Ok(()),
             Payload::DmaRemoveTraceReply { succeeded: false } => Err(Error::EraseFail(destination)),
@@ -236,7 +236,7 @@ pub mod remote_dma {
 
     pub fn send_playback(io: &Io, id: u32, destination: u8, timestamp: u64) -> Result<(), Error> {
         let reply = drtio::aux_transact(io, destination,
-            Payload::DmaPlaybackRequest{ id: id, timestamp: timestamp })?;
+            &Payload::DmaPlaybackRequest{ id: id, timestamp: timestamp })?;
         match reply {
             Payload::DmaPlaybackReply { succeeded: true } => Ok(()),
             Payload::DmaPlaybackReply { succeeded: false } =>

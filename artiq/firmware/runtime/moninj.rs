@@ -55,7 +55,7 @@ mod remote_moninj {
 
     pub fn read_probe(io: &Io, destination: u8, channel: u16, probe: u8) -> u64 {
         let reply = drtio::aux_transact(io, destination,
-            drtioaux::Payload::MonitorRequest { 
+            &drtioaux::Payload::MonitorRequest { 
                 channel: channel,
                 probe: probe
             });
@@ -69,7 +69,7 @@ mod remote_moninj {
 
     pub fn inject(_io: &Io, destination: u8, channel: u16, overrd: u8, value: u8) {
         drtio::async_aux_transact(destination,
-            drtioaux::Payload::InjectionRequest {
+            &drtioaux::Payload::InjectionRequest {
             channel: channel,
             overrd: overrd,
             value: value
@@ -78,7 +78,7 @@ mod remote_moninj {
 
     pub fn read_injection_status(io: &Io, destination: u8, channel: u16, overrd: u8) -> u8 {
         let reply = drtio::aux_transact(io, destination,
-            drtioaux::Payload::InjectionStatusRequest {
+            &drtioaux::Payload::InjectionStatusRequest {
                 channel: channel,
                 overrd: overrd
             });
