@@ -212,7 +212,7 @@ fn startup() {
     #[cfg(any(has_rtio_moninj, has_drtio))]
     {
         let drtio_routing_table = drtio_routing_table.clone();
-        io.spawn(4096, move |io| { moninj::thread(io, &drtio_routing_table) });
+        io.spawn(8192, move |io| { moninj::thread(io, &drtio_routing_table) });
     }
     #[cfg(has_rtio_analyzer)]
     {

@@ -80,7 +80,8 @@ pub enum Error {
     NoMessage,
     AwaitingMessage,
     SubkernelIoError,
-    DrtioError,
+    DrtioError(AuxError),
+    UnexpectedMessage(drtioaux::Payload),
     KernelException(Sliceable),
     DmaError(DmaError),
 }
@@ -98,14 +99,14 @@ impl From<io::Error<!>> for Error {
 }
 
 impl From<drtioaux::Error<!>> for Error {
-    fn from(_value: drtioaux::Error<!>) -> Error {
-        Error::DrtioError
+    fn from(value: drtioaux::Error<!>) -> Error {
+        Error::DrtioError(AuxError::from(value))
     }
 }
 
 impl From<AuxError> for Error {
-    fn from(_value: AuxError) -> Error {
-        Error::DrtioError
+    fn from(value: AuxError) -> Error {
+        Error::DrtioError(value)
     }
 }
 
@@ -246,7 +247,7 @@ impl MessageManager {
         let mut data_slice: [u8; MASTER_PAYLOAD_MAX_SIZE] = [0; MASTER_PAYLOAD_MAX_SIZE];
         self.out_state = OutMessageState::MessageBeingSent;
         let meta = self.get_outgoing_slice(&mut data_slice).unwrap();
-        let transaction_id = aux_mgr.transact(destination, false, drtioaux::Payload::SubkernelMessage {
+        let transaction_id = aux_mgr.transact(destination, drtioaux::Payload::SubkernelMessage {
                 id: id, status: meta.status, length: meta.len as u16, data: data_slice
         })?;
         Ok(transaction_id)
@@ -461,7 +462,7 @@ impl Manager {
             if pending.len() > 0 {
                 warn!("subkernel terminated with messages still pending: {:?}", pending);
             }
-            aux_mgr.transact(subkernel_finished.source, false, drtioaux::Payload::SubkernelFinished {
+            aux_mgr.transact(subkernel_finished.source, drtioaux::Payload::SubkernelFinished {
                 id: subkernel_finished.id, with_exception: subkernel_finished.with_exception,
                 exception_src: subkernel_finished.exception_source
             }).unwrap();
@@ -523,11 +524,11 @@ impl Manager {
             },
             KernelState::MsgSending { transaction_id } => {
                 match aux_mgr.check_transaction(*transaction_id)? {
-                    Some(drtioaux::Payload::PacketAck) => {
+                    Some(drtioaux::Payload::SubkernelMessageAck) => {
                         if self.session.messages.ack_slice() {
                             let mut data_slice: [u8; MASTER_PAYLOAD_MAX_SIZE] = [0; MASTER_PAYLOAD_MAX_SIZE];
                             if let Some(meta) = self.session.messages.get_outgoing_slice(&mut data_slice) {
-                                let new_id = aux_mgr.transact(meta.destination, false, drtioaux::Payload::SubkernelMessage {
+                                let new_id = aux_mgr.transact(meta.destination, drtioaux::Payload::SubkernelMessage {
                                     id: self.current_id,
                                     status: meta.status, length: meta.len as u16, data: data_slice
                                 })?;
@@ -542,7 +543,7 @@ impl Manager {
                     },
                     Some(p) => {
                         error!("subkernel message send received unexpected reply: {:?}", p);
-                        Err(Error::DrtioError)
+                        Err(Error::UnexpectedMessage(p))
                     },
                     None => Err(Error::AwaitingMessage),
                 }
@@ -609,7 +610,7 @@ impl Manager {
                     }
                     Some(p) => {
                         error!("subkernel message send received unexpected reply: {:?}", p);
-                        Err(Error::DrtioError)
+                        Err(Error::UnexpectedMessage(p))
                     }
                     None => Ok(()),
                 }
@@ -775,13 +776,13 @@ impl Manager {
                     let max_time = if timeout > 0 { clock::get_ms() as i64 + timeout } else { timeout };
                     // ID equal to -1 indicates wildcard for receiving arguments
                     let id = if id == -1 { self.current_id } else { id as u32 };
-                    self.session.kernel_state = KernelState::MsgAwait { 
+                    self.session.kernel_state = KernelState::MsgAwait {
                         id: id, max_time: max_time, tags: tags.to_vec() };
                     Ok(())
                 },
 
                 &kern::SubkernelLoadRunRequest { id, destination, run } => {                    
-                    let transaction_id = aux_mgr.transact(destination, false, drtioaux::Payload::SubkernelLoadRunRequest { 
+                    let transaction_id = aux_mgr.transact(destination, drtioaux::Payload::SubkernelLoadRunRequest { 
                         id: id, run: run
                     })?;
                     self.session.kernel_state = KernelState::SubkernelAwaitLoad { transaction_id: transaction_id };

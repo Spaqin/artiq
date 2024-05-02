@@ -354,7 +354,9 @@ fn process_flash_kernel(io: &Io, _subkernel_mutex: &Mutex,
                     };
                     if up {
                         let subkernel_lib = entry.data().to_vec();
+                        debug!("adding subkernel");
                         subkernel::add_subkernel(io, _subkernel_mutex, sid, dest, subkernel_lib)?;
+                        debug!("uploading subkernel");
                         subkernel::upload(io, _subkernel_mutex, sid)?;
                     } else {
                         return Err(Error::DestinationDown);
@@ -886,7 +888,7 @@ fn respawn<F>(io: &Io, handle: &mut Option<ThreadHandle>, f: F)
         }
     }
 
-    *handle = Some(io.spawn(24576, f))
+    *handle = Some(io.spawn(32768, f))
 }
 
 pub fn thread(io: Io, routing_table: &Urc<RefCell<drtio_routing::RoutingTable>>,

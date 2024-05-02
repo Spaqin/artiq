@@ -1,4 +1,4 @@
-#![feature(never_type, panic_info_message, llvm_asm, default_alloc_error_handler, try_trait, btree_retain)]
+#![feature(never_type, panic_info_message, llvm_asm, default_alloc_error_handler, try_trait, btree_retain, const_in_array_repeat_expressions)]
 #![no_std]
 
 #[macro_use]
@@ -38,7 +38,7 @@ mod analyzer;
 mod kernel;
 mod cache;
 
-fn drtiosat_reset(reset: bool) {
+pub fn drtiosat_reset(reset: bool) {
     unsafe {
         csr::drtiosat::reset_write(if reset { 1 } else { 0 });
     }
@@ -99,22 +99,10 @@ fn process_aux_packet(dmamgr: &mut DmaManager, analyzer: &mut Analyzer, kernelmg
         packet: &drtioaux::Payload, transaction_id: u8, source: u8) {
     macro_rules! respond {
         ( $packet:expr ) => {
-            aux_mgr.respond(transaction_id, source, $packet);
+            aux_mgr.respond(transaction_id, source, &$packet);
         }
     }
     match *packet {
-        drtioaux::Payload::ResetRequest => {
-            info!("resetting RTIO");
-            drtiosat_reset(true);
-            clock::spin_us(100);
-            drtiosat_reset(false);
-            for rep in _repeaters.iter() {
-                if let Err(e) = rep.rtio_reset() {
-                    error!("failed to issue RTIO reset ({})", e);
-                }
-            }
-        },
-
         drtioaux::Payload::DestinationStatusRequest => {
             let errors;
             unsafe {
@@ -562,7 +550,7 @@ pub extern fn main() -> i32 {
             drtiosat_process_errors();
 
             aux_mgr.service(&mut repeaters);
-            let transaction = aux_mgr.get_incoming_packet(clock::get_ms());
+            let transaction = aux_mgr.get_incoming_packet();
             if let Some((transaction_id, source, packet)) = transaction {
                 process_aux_packet(&mut dma_manager, &mut analyzer,
                     &mut kernelmgr, &mut repeaters, &mut aux_mgr,
@@ -580,7 +568,7 @@ pub extern fn main() -> i32 {
             
             if let Some(status) = dma_manager.get_status() {
                 info!("playback done, error: {}, channel: {}, timestamp: {}", status.error, status.channel, status.timestamp);
-                aux_mgr.transact(status.source, false, drtioaux::Payload::DmaPlaybackStatus { 
+                aux_mgr.transact(status.source, drtioaux::Payload::DmaPlaybackStatus { 
                     id: status.id, error: status.error, channel: status.channel, timestamp: status.timestamp 
                 }).unwrap();
             }

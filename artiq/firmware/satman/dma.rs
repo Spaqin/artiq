@@ -104,7 +104,7 @@ impl RemoteTraces {
                 // queue up the first packet for all destinations, rest will be sent after first ACK
                 let mut data_slice: [u8; MASTER_PAYLOAD_MAX_SIZE] = [0; MASTER_PAYLOAD_MAX_SIZE];
                 let meta = trace.get_slice_master(&mut data_slice);
-                let transaction_id = aux_mgr.transact(*dest, true, drtioaux::Payload::DmaAddTraceRequest {
+                let transaction_id = aux_mgr.transact(*dest, drtioaux::Payload::DmaAddTraceRequest {
                      id: id, status: meta.status, length: meta.len, trace: data_slice
                 }).unwrap();
                 ids.push(transaction_id);
@@ -125,7 +125,7 @@ impl RemoteTraces {
                 // send next slice
                 let mut data_slice: [u8; MASTER_PAYLOAD_MAX_SIZE] = [0; MASTER_PAYLOAD_MAX_SIZE];
                 let meta = trace.get_slice_master(&mut data_slice);
-                let transaction_id = aux_mgr.transact(meta.destination, true, drtioaux::Payload::DmaAddTraceRequest {
+                let transaction_id = aux_mgr.transact(meta.destination, drtioaux::Payload::DmaAddTraceRequest {
                     id: id, status: meta.status, length: meta.len, trace: data_slice
                 }).unwrap();
                 Some(transaction_id)
@@ -186,7 +186,7 @@ impl RemoteTraces {
     pub fn playback(&mut self, id: u32, timestamp: u64, aux_mgr: &mut AuxManager) {
         let mut ids: Vec<u8> = Vec::new();
         for (dest, _) in self.remote_traces.iter() {
-            let transaction_id = aux_mgr.transact(*dest, true,
+            let transaction_id = aux_mgr.transact(*dest,
                 drtioaux::Payload::DmaPlaybackRequest {
                     id: id, timestamp: timestamp 
                 }).unwrap();
@@ -247,7 +247,7 @@ impl RemoteTraces {
 
     pub fn erase(&mut self, id: u32, aux_mgr: &mut AuxManager) {
         for (dest, _) in self.remote_traces.iter() {
-            let _ = aux_mgr.transact(*dest, true, drtioaux::Payload::DmaRemoveTraceRequest { 
+            let _ = aux_mgr.transact(*dest, drtioaux::Payload::DmaRemoveTraceRequest { 
                 id: id
             });
             // response will be ignored as this object will stop existing too

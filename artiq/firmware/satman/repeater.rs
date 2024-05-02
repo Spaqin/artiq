@@ -276,7 +276,6 @@ impl Repeater {
             return Ok(());
         }
 
-        // todo: replace with aux transact
         drtioaux::send(self.auxno, &drtioaux::Packet {
             source: 0,
             destination: 0,

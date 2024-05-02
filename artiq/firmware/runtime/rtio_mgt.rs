@@ -330,7 +330,7 @@ pub mod drtio {
             let link_states = link_states.clone();
             let ddma_mutex = ddma_mutex.clone();
             let subkernel_mutex = subkernel_mutex.clone();
-            io.spawn(16384*2, move |io| {
+            io.spawn(16384, move |io| {
                 let routing_table = routing_table.borrow();
                 link_thread(io, &routing_table, &link_states, &up_destinations, &ddma_mutex, &subkernel_mutex);
             });
@@ -339,7 +339,7 @@ pub mod drtio {
             let link_states = link_states.clone();
             let ddma_mutex = ddma_mutex.clone();
             let subkernel_mutex = subkernel_mutex.clone();
-            io.spawn(8192, move |io| {
+            io.spawn(16384, move |io| {
                 recv_thread(io, &ddma_mutex, &subkernel_mutex, &link_states);
             });
         }
@@ -737,20 +737,20 @@ pub mod drtio {
     }
 
     pub fn partition_data<F>(data: &[u8], send_f: F) -> Result<(), Error>
-            where F: Fn(&[u8; MASTER_PAYLOAD_MAX_SIZE], PayloadStatus, usize) -> Result<(), Error> {
-            let mut i = 0;
-            while i < data.len() {
-                let mut slice: [u8; MASTER_PAYLOAD_MAX_SIZE] = [0; MASTER_PAYLOAD_MAX_SIZE];
-                let len: usize = if i + MASTER_PAYLOAD_MAX_SIZE < data.len() { MASTER_PAYLOAD_MAX_SIZE } else { data.len() - i } as usize;
-                let first = i == 0;
-                let last = i + len == data.len();
-                let status = PayloadStatus::from_status(first, last);
-                slice[..len].clone_from_slice(&data[i..i+len]);
-                i += len;
-                send_f(&slice, status, len)?;
-            }
-            Ok(())
+        where F: Fn(&[u8; MASTER_PAYLOAD_MAX_SIZE], PayloadStatus, usize) -> Result<(), Error> {
+        let mut i = 0;
+        while i < data.len() {
+            let mut slice: [u8; MASTER_PAYLOAD_MAX_SIZE] = [0; MASTER_PAYLOAD_MAX_SIZE];
+            let len: usize = if i + MASTER_PAYLOAD_MAX_SIZE < data.len() { MASTER_PAYLOAD_MAX_SIZE } else { data.len() - i } as usize;
+            let first = i == 0;
+            let last = i + len == data.len();
+            let status = PayloadStatus::from_status(first, last);
+            slice[..len].clone_from_slice(&data[i..i+len]);
+            i += len;
+            send_f(&slice, status, len)?;
         }
+        Ok(())
+    }
 
 }
 
