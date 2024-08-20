@@ -65,3 +65,11 @@ class EmbeddingMap:
 
     def retrieve_str(self, key):
         return self.string_map[key]
+
+    def subkernels(self):
+        subkernels = {}
+        for k, v in self.function_map.items():
+            if hasattr(v, "__artiq_destination__"):
+                if v.__artiq_destination__ is not None:
+                    subkernels[k] = v
+        return subkernels

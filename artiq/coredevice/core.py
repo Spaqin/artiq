@@ -78,7 +78,6 @@ class Core:
 
         self.target = target
         self.analyzed = False
-        self.compiler = nac3artiq.NAC3(target, artiq_builtins)
         
         self.analyzer_proxy_name = analyzer_proxy
         self.analyze_at_run_end = analyze_at_run_end
@@ -94,12 +93,11 @@ class Core:
         self.comm.close()
 
     def compile(self, method, args, kwargs, embedding_map, file_output=None, target=None):
-        if target is not None:
-            # NAC3TODO: subkernels
-            raise NotImplementedError
+        target = target or self.target
+        compiler = nac3artiq.NAC3(target, artiq_builtins)
 
         if not self.analyzed:
-            self.compiler.analyze(core_language._registered_functions, core_language._registered_classes)
+            compiler.analyze(core_language._registered_functions, core_language._registered_classes)
             self.analyzed = True
 
         if hasattr(method, "__self__"):
@@ -110,10 +108,22 @@ class Core:
             name = ""
 
         if file_output is None:
-            return self.compiler.compile_method_to_mem(obj, name, args, embedding_map)
+            return compiler.compile_method_to_mem(obj, name, args, embedding_map)
         else:
-            self.compiler.compile_method_to_file(obj, name, args, file_output, embedding_map)
+            compiler.compile_method_to_file(obj, name, args, file_output, embedding_map)
 
+
+ def compile_subkernel(self, sid, subkernel_fn, embedding_map, args, subkernel_arg_types, subkernels):
+        # pass self to subkernels (if applicable)
+        # assuming the first argument is self
+        subkernel_args = getfullargspec(subkernel_fn.__wrapped__)
+        destination = subkernel_fn.__artiq_destination__
+        destination_tgt = self.satellite_cpu_targets[destination]
+        kernel_library = \
+            self.compile(subkernel_fn, args, {}, embedding_map, file_output=None, target=destination_tgt)
+        return kernel_library
+        
+        
     def run(self, function, args, kwargs):
         embedding_map = EmbeddingMap()
         kernel_library = self.compile(function, args, kwargs, embedding_map)

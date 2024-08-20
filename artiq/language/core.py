@@ -84,7 +84,18 @@ def kernel(function_or_method):
         def run_on_core(*args, **kwargs):
             raise RuntimeError("Kernel functions need explicit core.run()")
     run_on_core.__artiq_kernel__ = True
+    run_on_core.__artiq_destination__ = None
     return run_on_core
+
+def subkernel(function_or_method, destination=0):
+    """Decorates a function or method to be executed on a satellite core device."""
+    _register_function(function_or_method)
+    @wraps(function_or_method)
+    def run_on_core(*args, **kwargs):
+        raise RuntimeError("Subkernels cannot be called by the host")
+    run_on_core.__artiq_kernel__ = True
+    run_on_core.__artiq_destination__ = destination
+    return function_or_method
 
 
 def portable(function):
