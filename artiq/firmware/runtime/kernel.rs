@@ -483,7 +483,7 @@ pub mod subkernel {
         drtio::partition_data(data, |slice, status, len: usize| {
             let reply = drtio::aux_transact(io, destination,
                 &Payload::SubkernelAddDataRequest {
-                    id: id, status: status, length: len as u16, data: *slice})?;
+                    id, status, length: len as u16, data: *slice})?;
             match reply {
                 Payload::SubkernelAddDataReply { succeeded: true } => Ok(()),
                 Payload::SubkernelAddDataReply { succeeded: false } =>  
@@ -498,9 +498,9 @@ pub mod subkernel {
         })
     }
 
-    pub fn subkernel_load(io: &Io, id: u32, destination: u8, run: bool) -> Result<(), Error> {
+    pub fn subkernel_load(io: &Io, id: u32, destination: u8, run: bool, timestamp: u64) -> Result<(), Error> {
         let reply = drtio::aux_transact(io, destination,
-            &Payload::SubkernelLoadRunRequest { id: id, run: run })?;
+            &Payload::SubkernelLoadRunRequest { id, run, timestamp })?;
         match reply {
             Payload::SubkernelLoadRunReply { succeeded: true } => Ok(()),
             Payload::SubkernelLoadRunReply { succeeded: false } =>
@@ -530,7 +530,7 @@ pub mod subkernel {
         drtio::partition_data(message, |slice, status, len: usize| {
             let reply = drtio::aux_transact(io, destination,
                 &Payload::SubkernelMessage {
-                    id: id, status: status, length: len as u16, data: *slice})?;
+                    id, status, length: len as u16, data: *slice})?;
             match reply {
                 Payload::SubkernelMessageAck => Ok(()),
                 packet => Err(drtio::Error::UnexpectedPacket(packet)),

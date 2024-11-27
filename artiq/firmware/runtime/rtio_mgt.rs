@@ -183,8 +183,9 @@ pub mod drtio {
 
     impl TransactionManager {
         pub const fn new() -> TransactionManager {
+            const DEFAULT: Option<Box<Transaction>> = None;
             TransactionManager {
-                transactions: [None; 128],
+                transactions: [DEFAULT; 128],
                 routable_packets: Vec::new(),
                 next_id: 0,
                 recv_flush: None,
@@ -478,7 +479,7 @@ pub mod drtio {
         Ok(reply.payload)
     }
 
-    fn ping_remote(io: &Io, aux_mutex: &Mutex, linkno: u8) -> u32 {
+    fn ping_remote(io: &Io, linkno: u8) -> u32 {
         let mut count = 0;
         loop {
             if !link_rx_up(linkno) {
@@ -878,6 +879,7 @@ pub fn startup(io: &Io, routing_table: &Urc<RefCell<drtio_routing::RoutingTable>
         up_destinations: &Urc<RefCell<[bool; drtio_routing::DEST_COUNT]>>,
         ddma_mutex: &Mutex, subkernel_mutex: &Mutex) {
     set_device_map(read_device_map());
+    setup_sed_spread();
     drtio::startup(io, routing_table, up_destinations, ddma_mutex, subkernel_mutex);
     unsafe {
         csr::rtio_core::reset_phy_write(1);

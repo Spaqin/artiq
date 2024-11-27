@@ -1,4 +1,4 @@
-#![feature(lang_items, panic_info_message, const_btree_new, btree_retain, iter_advance_by, never_type, const_in_array_repeat_expressions)]
+#![feature(lang_items, panic_info_message, const_btree_new, iter_advance_by, never_type)]
 #![no_std]
 
 extern crate crc;
@@ -209,11 +209,8 @@ fn startup() {
     rtio_mgt::startup(&io, &drtio_routing_table, &up_destinations, &ddma_mutex, &subkernel_mutex);
     {
         let restart_idle = restart_idle.clone();
-        let aux_mutex = aux_mutex.clone();
-        let ddma_mutex = ddma_mutex.clone();
-        let subkernel_mutex = subkernel_mutex.clone();
         let drtio_routing_table = drtio_routing_table.clone();
-        io.spawn(4096, move |io| { mgmt::thread(io, &restart_idle, &aux_mutex, &ddma_mutex, &subkernel_mutex, &drtio_routing_table) });
+        io.spawn(4096, move |io| { mgmt::thread(io, &restart_idle, &drtio_routing_table) });
     }
     {
         let drtio_routing_table = drtio_routing_table.clone();

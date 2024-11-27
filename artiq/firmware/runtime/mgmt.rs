@@ -3,7 +3,7 @@ use core::cell::{Cell, RefCell};
 use board_artiq::drtio_routing::RoutingTable;
 use io::{ProtoRead, Write, Error as IoError};
 use mgmt_proto::*;
-use sched::{Io, Mutex, TcpListener, TcpStream, Error as SchedError};
+use sched::{Io, TcpListener, TcpStream, Error as SchedError};
 use urc::Urc;
 
 impl From<SchedError> for Error<SchedError> {
@@ -193,7 +193,7 @@ mod remote_coremgmt {
     use alloc::{string::String, vec::Vec};
     use log::LevelFilter;
 
-    use board_artiq::{drtioaux, drtioaux::Packet};
+    use board_artiq::drtioaux::Payload;
     use io::ProtoWrite;
     use rtio_mgt::drtio;
     use proto_artiq::drtioaux_proto::MASTER_PAYLOAD_MAX_SIZE;
@@ -206,18 +206,13 @@ mod remote_coremgmt {
         }
     }
 
-    pub fn get_log(io: &Io, aux_mutex: &Mutex,
-        ddma_mutex: &Mutex, subkernel_mutex: &Mutex, 
-        routing_table: &RoutingTable, linkno: u8,
-        destination: u8, stream: &mut TcpStream) -> Result<(), Error<SchedError>> {
+    pub fn get_log(io: &Io, destination: u8, stream: &mut TcpStream) -> Result<(), Error<SchedError>> {
         let mut buffer = String::new();
         loop {
-            let reply = drtio::aux_transact(io, aux_mutex, ddma_mutex, subkernel_mutex, routing_table, linkno,
-                &Packet::CoreMgmtGetLogRequest { destination, clear: false }
-            );
+            let reply = drtio::aux_transact(io, destination, &Payload::CoreMgmtGetLogRequest { clear: false });
             
             match reply {
-                Ok(Packet::CoreMgmtGetLogReply { last, length, data }) => {
+                Ok(Payload::CoreMgmtGetLogReply { last, length, data }) => {
                     buffer.push_str(
                         core::str::from_utf8(&data[..length as usize]).map_err(|_| Error::DrtioError)?);
                     if last {
@@ -239,16 +234,11 @@ mod remote_coremgmt {
         }
     }
 
-    pub fn clear_log(io: &Io, aux_mutex: &Mutex,
-        ddma_mutex: &Mutex, subkernel_mutex: &Mutex, 
-        routing_table: &RoutingTable, linkno: u8,
-        destination: u8, stream: &mut TcpStream) -> Result<(), Error<SchedError>> {
-        let reply = drtio::aux_transact(io, aux_mutex, ddma_mutex, subkernel_mutex, routing_table, linkno,
-            &Packet::CoreMgmtClearLogRequest { destination }
-        );
+    pub fn clear_log(io: &Io, destination: u8, stream: &mut TcpStream) -> Result<(), Error<SchedError>> {
+        let reply = drtio::aux_transact(io, destination, &Payload::CoreMgmtClearLogRequest);
 
         match reply {
-            Ok(Packet::CoreMgmtReply { succeeded: true }) => {
+            Ok(Payload::CoreMgmtReply { succeeded: true }) => {
                 Reply::Success.write_to(stream)?;
                 Ok(())
             }
@@ -265,18 +255,15 @@ mod remote_coremgmt {
         }
     }
 
-    pub fn pull_log(io: &Io, aux_mutex: &Mutex,
-        ddma_mutex: &Mutex, subkernel_mutex: &Mutex, 
-        routing_table: &RoutingTable, linkno: u8,
-        destination: u8, stream: &mut TcpStream) -> Result<(), Error<SchedError>> {
+    pub fn pull_log(io: &Io, destination: u8, stream: &mut TcpStream) -> Result<(), Error<SchedError>> {
         let mut buffer = Vec::new();
         loop {
-            let reply = drtio::aux_transact(io, aux_mutex, ddma_mutex, subkernel_mutex, routing_table, linkno,
-                &Packet::CoreMgmtGetLogRequest { destination, clear: true }
+            let reply = drtio::aux_transact(io, destination,
+                &Payload::CoreMgmtGetLogRequest { clear: true }
             );
 
             match reply {
-                Ok(Packet::CoreMgmtGetLogReply { last, length, data }) => {
+                Ok(Payload::CoreMgmtGetLogReply { last, length, data }) => {
                     buffer.extend(&data[..length as usize]);
 
                     if last {
@@ -296,16 +283,14 @@ mod remote_coremgmt {
         }
     }
 
-    pub fn set_log_filter(io: &Io, aux_mutex: &Mutex,
-        ddma_mutex: &Mutex, subkernel_mutex: &Mutex, 
-        routing_table: &RoutingTable, linkno: u8,
-        destination: u8, stream: &mut TcpStream, level: LevelFilter) -> Result<(), Error<SchedError>> {
-        let reply = drtio::aux_transact(io, aux_mutex, ddma_mutex, subkernel_mutex, routing_table, linkno,
-            &Packet::CoreMgmtSetLogLevelRequest { destination, log_level: level as u8 }
+    pub fn set_log_filter(io: &Io, destination: u8, stream: &mut TcpStream, level: LevelFilter
+    ) -> Result<(), Error<SchedError>> {
+        let reply = drtio::aux_transact(io, destination,
+            &Payload::CoreMgmtSetLogLevelRequest { log_level: level as u8 }
         );
 
         match reply {
-            Ok(Packet::CoreMgmtReply { succeeded: true }) => {
+            Ok(Payload::CoreMgmtReply { succeeded: true }) => {
                 Reply::Success.write_to(stream)?;
                 Ok(())
             }
@@ -322,16 +307,14 @@ mod remote_coremgmt {
         }
     }
 
-    pub fn set_uart_log_filter(io: &Io, aux_mutex: &Mutex,
-        ddma_mutex: &Mutex, subkernel_mutex: &Mutex, 
-        routing_table: &RoutingTable, linkno: u8,
-        destination: u8, stream: &mut TcpStream, level: LevelFilter) -> Result<(), Error<SchedError>> {
-        let reply = drtio::aux_transact(io, aux_mutex, ddma_mutex, subkernel_mutex, routing_table, linkno,
-            &Packet::CoreMgmtSetUartLogLevelRequest { destination, log_level: level as u8 }
+    pub fn set_uart_log_filter(io: &Io, destination: u8, stream: &mut TcpStream, level: LevelFilter
+    ) -> Result<(), Error<SchedError>> {
+        let reply = drtio::aux_transact(io, destination,
+            &Payload::CoreMgmtSetUartLogLevelRequest { log_level: level as u8 }
         );
 
         match reply {
-            Ok(Packet::CoreMgmtReply { succeeded: true }) => {
+            Ok(Payload::CoreMgmtReply { succeeded: true }) => {
                 Reply::Success.write_to(stream)?;
                 Ok(())
             }
@@ -348,17 +331,14 @@ mod remote_coremgmt {
         }
     }
 
-    pub fn config_read(io: &Io, aux_mutex: &Mutex,
-        ddma_mutex: &Mutex, subkernel_mutex: &Mutex, 
-        routing_table: &RoutingTable, linkno: u8,
-        destination: u8, stream: &mut TcpStream, key: &String) -> Result<(), Error<SchedError>> {
+    pub fn config_read(io: &Io, destination: u8, stream: &mut TcpStream, key: &String
+    ) -> Result<(), Error<SchedError>> {
         let mut config_key: [u8; MASTER_PAYLOAD_MAX_SIZE] = [0; MASTER_PAYLOAD_MAX_SIZE];
         let len = key.len();
         config_key[..len].clone_from_slice(key.as_bytes());
 
-        let mut reply = drtio::aux_transact(io, aux_mutex, ddma_mutex, subkernel_mutex, routing_table, linkno,
-            &Packet::CoreMgmtConfigReadRequest {
-                destination: destination,
+        let mut reply = drtio::aux_transact(io, destination,
+            &Payload::CoreMgmtConfigReadRequest {
                 length: len as u16,
                 key: config_key,
             }
@@ -367,7 +347,7 @@ mod remote_coremgmt {
         let mut buffer = Vec::<u8>::new();
         loop {
             match reply {
-                Ok(Packet::CoreMgmtConfigReadReply { length, last, value }) => {
+                Ok(Payload::CoreMgmtConfigReadReply { length, last, value }) => {
                     buffer.extend(&value[..length as usize]);
 
                     if last {
@@ -375,11 +355,7 @@ mod remote_coremgmt {
                         return Ok(());
                     }
 
-                    reply = drtio::aux_transact(io, aux_mutex, ddma_mutex, subkernel_mutex, routing_table, linkno,
-                        &Packet::CoreMgmtConfigReadContinue {
-                            destination: destination,
-                        }
-                    );
+                    reply = drtio::aux_transact(io, destination, &Payload::CoreMgmtConfigReadContinue);
                 }
                 Ok(packet) => {
                     error!("received unexpected aux packet: {:?}", packet);
@@ -395,21 +371,18 @@ mod remote_coremgmt {
         }
     }
 
-    pub fn config_write(io: &Io, aux_mutex: &Mutex,
-        ddma_mutex: &Mutex, subkernel_mutex: &Mutex, 
-        routing_table: &RoutingTable, linkno: u8,
-        destination: u8, stream: &mut TcpStream, key: &String, value: &Vec<u8>,
+    pub fn config_write(io: &Io, destination: u8, stream: &mut TcpStream, key: &String, value: &Vec<u8>,
         _restart_idle: &Urc<Cell<bool>>) -> Result<(), Error<SchedError>> {
         let mut message = Vec::with_capacity(key.len() + value.len() + 4 * 2);
         message.write_string(key).unwrap();
         message.write_bytes(value).unwrap();
 
         match drtio::partition_data(&message, |slice, status, len: usize| {
-            let reply = drtio::aux_transact(io, aux_mutex, ddma_mutex, subkernel_mutex, routing_table, linkno, 
-                &Packet::CoreMgmtConfigWriteRequest {
-                    destination: destination, length: len as u16, last: status.is_last(), data: *slice});
+            let reply = drtio::aux_transact(io, destination, 
+                &Payload::CoreMgmtConfigWriteRequest {
+                    length: len as u16, last: status.is_last(), data: *slice});
             match reply {
-                Ok(Packet::CoreMgmtReply { succeeded: true }) => Ok(()),
+                Ok(Payload::CoreMgmtReply { succeeded: true }) => Ok(()),
                 Ok(packet) => {
                     error!("received unexpected aux packet: {:?}", packet);
                     Err(drtio::Error::UnexpectedReply)
@@ -431,24 +404,19 @@ mod remote_coremgmt {
         }
     }
 
-    pub fn config_remove(io: &Io, aux_mutex: &Mutex,
-        ddma_mutex: &Mutex, subkernel_mutex: &Mutex, 
-        routing_table: &RoutingTable, linkno: u8,
-        destination: u8, stream: &mut TcpStream, key: &String,
+    pub fn config_remove(io: &Io, destination: u8, stream: &mut TcpStream, key: &String,
         _restart_idle: &Urc<Cell<bool>>) -> Result<(), Error<SchedError>> {
         let mut config_key: [u8; MASTER_PAYLOAD_MAX_SIZE] = [0; MASTER_PAYLOAD_MAX_SIZE];
         let len = key.len();
         config_key[..len].clone_from_slice(key.as_bytes());
 
-        let reply = drtio::aux_transact(io, aux_mutex, ddma_mutex, subkernel_mutex, routing_table, linkno,
-            &Packet::CoreMgmtConfigRemoveRequest {
-                destination: destination,
+        let reply = drtio::aux_transact(io, destination, &Payload::CoreMgmtConfigRemoveRequest {
                 length: key.len() as u16,
                 key: config_key,
             });
 
         match reply {
-            Ok(Packet::CoreMgmtReply { succeeded: true }) => {
+            Ok(Payload::CoreMgmtReply { succeeded: true }) => {
                 Reply::Success.write_to(stream)?;
                 Ok(())
             }
@@ -465,17 +433,12 @@ mod remote_coremgmt {
         }
     }
 
-    pub fn config_erase(io: &Io, aux_mutex: &Mutex,
-        ddma_mutex: &Mutex, subkernel_mutex: &Mutex, 
-        routing_table: &RoutingTable, linkno: u8,
-        destination: u8, stream: &mut TcpStream, _restart_idle: &Urc<Cell<bool>>) -> Result<(), Error<SchedError>> {
-        let reply = drtio::aux_transact(io, aux_mutex, ddma_mutex, subkernel_mutex, routing_table, linkno,
-            &Packet::CoreMgmtConfigEraseRequest {
-                destination: destination,
-            });
+    pub fn config_erase(io: &Io, destination: u8, stream: &mut TcpStream, _restart_idle: &Urc<Cell<bool>>
+    ) -> Result<(), Error<SchedError>> {
+        let reply = drtio::aux_transact(io, destination, &Payload::CoreMgmtConfigEraseRequest);
         
         match reply {
-            Ok(Packet::CoreMgmtReply { succeeded: true }) => {
+            Ok(Payload::CoreMgmtReply { succeeded: true }) => {
                 Reply::Success.write_to(stream)?;
                 Ok(())
             }
@@ -492,17 +455,11 @@ mod remote_coremgmt {
         }
     }
 
-    pub fn reboot(io: &Io, aux_mutex: &Mutex,
-        ddma_mutex: &Mutex, subkernel_mutex: &Mutex, 
-        routing_table: &RoutingTable, linkno: u8,
-        destination: u8, stream: &mut TcpStream) -> Result<(), Error<SchedError>> {
-        let reply = drtio::aux_transact(io, aux_mutex, ddma_mutex, subkernel_mutex, routing_table, linkno,
-            &Packet::CoreMgmtRebootRequest {
-                destination: destination,
-            });
+    pub fn reboot(io: &Io, destination: u8, stream: &mut TcpStream) -> Result<(), Error<SchedError>> {
+        let reply = drtio::aux_transact(io, destination, &Payload::CoreMgmtRebootRequest);
         
         match reply {
-            Ok(Packet::CoreMgmtReply { succeeded: true }) => {
+            Ok(Payload::CoreMgmtReply { succeeded: true }) => {
                 Reply::RebootImminent.write_to(stream)?;
                 Ok(())
             }
@@ -519,17 +476,12 @@ mod remote_coremgmt {
         }
     }
 
-    pub fn debug_allocator(io: &Io, aux_mutex: &Mutex,
-        ddma_mutex: &Mutex, subkernel_mutex: &Mutex, 
-        routing_table: &RoutingTable, linkno: u8,
-        destination: u8, _stream: &mut TcpStream) -> Result<(), Error<SchedError>> {
-        let reply = drtio::aux_transact(io, aux_mutex, ddma_mutex, subkernel_mutex, routing_table, linkno,
-            &Packet::CoreMgmtAllocatorDebugRequest {
-                destination: destination,
-            });
+    pub fn debug_allocator(io: &Io, destination: u8, _stream: &mut TcpStream
+    ) -> Result<(), Error<SchedError>> {
+        let reply = drtio::aux_transact(io, destination, &Payload::CoreMgmtAllocatorDebugRequest);
 
         match reply {
-            Ok(Packet::CoreMgmtReply { succeeded: true }) => Ok(()),
+            Ok(Payload::CoreMgmtReply { succeeded: true }) => Ok(()),
             Ok(packet) => {
                 error!("received unexpected aux packet: {:?}", packet);
                 Err(drtio::Error::UnexpectedReply.into())
@@ -541,19 +493,15 @@ mod remote_coremgmt {
         }
     }
 
-    pub fn flash(io: &Io, aux_mutex: &Mutex,
-        ddma_mutex: &Mutex, subkernel_mutex: &Mutex, 
-        routing_table: &RoutingTable, linkno: u8,
-        destination: u8, stream: &mut TcpStream, image: &[u8]) -> Result<(), Error<SchedError>> {
-
-        let alloc_reply = drtio::aux_transact(io, aux_mutex, ddma_mutex, subkernel_mutex, routing_table, linkno,
-            &Packet::CoreMgmtFlashRequest {
-                destination: destination,
+    pub fn flash(io: &Io, destination: u8, stream: &mut TcpStream, image: &[u8]
+    ) -> Result<(), Error<SchedError>> {
+        let alloc_reply = drtio::aux_transact(io, destination,
+            &Payload::CoreMgmtFlashRequest {
                 payload_length: image.len() as u32,
             });
 
         match alloc_reply {
-            Ok(Packet::CoreMgmtReply { succeeded: true }) => Ok(()),
+            Ok(Payload::CoreMgmtReply { succeeded: true }) => Ok(()),
             Ok(packet) => {
                 error!("received unexpected aux packet: {:?}", packet);
                 Reply::Error.write_to(stream)?;
@@ -567,16 +515,17 @@ mod remote_coremgmt {
         }?;
 
         match drtio::partition_data(&image, |slice, status, len: usize| {
-            let reply = drtio::aux_transact(io, aux_mutex, ddma_mutex, subkernel_mutex, routing_table, linkno, 
-                &Packet::CoreMgmtFlashAddDataRequest {
-                    destination: destination, length: len as u16, last: status.is_last(), data: *slice});
+            let reply = drtio::aux_transact(io, destination,
+                &Payload::CoreMgmtFlashAddDataRequest {
+                    length: len as u16, last: status.is_last(), data: *slice});
             match reply {
-                Ok(Packet::CoreMgmtReply { succeeded: true }) => Ok(()),
-                Ok(Packet::CoreMgmtDropLink) => {
+                Ok(Payload::CoreMgmtReply { succeeded: true }) => Ok(()),
+                Ok(Payload::CoreMgmtDropLink) => {
                     if status.is_last() {
-                        drtioaux::send(
-                            linkno, &Packet::CoreMgmtDropLinkAck { destination: destination }
-                        ).map_err(|_| drtio::Error::AuxError)
+                        let _ = drtio::async_aux_transact(destination,
+                            &Payload::CoreMgmtDropLinkAck
+                        );
+                        Ok(())
                     } else {
                         error!("received unexpected drop link packet");
                         Err(drtio::Error::UnexpectedReply)
@@ -606,26 +555,24 @@ mod remote_coremgmt {
 
 #[cfg(has_drtio)]
 macro_rules! process {
-    ($io:ident, $aux_mutex:ident, $ddma_mutex:ident, $subkernel_mutex:ident, $routing_table:ident, $tcp_stream:ident, $destination: ident, $func:ident $(, $param:expr)*) => {{
+    ($io:ident, $routing_table: ident, $tcp_stream:ident, $destination: ident, $func:ident $(, $param:expr)*) => {{
         let hop = $routing_table.0[$destination as usize][0];
         if hop == 0 {
             local_coremgmt::$func($io, $tcp_stream, $($param, )*)
         } else {
-            let linkno = hop - 1;
-            remote_coremgmt::$func($io, $aux_mutex, $ddma_mutex, $subkernel_mutex, $routing_table, linkno, $destination, $tcp_stream, $($param, )*)
+            remote_coremgmt::$func($io, $destination, $tcp_stream, $($param, )*)
         }
     }}
 }
 
 #[cfg(not(has_drtio))]
 macro_rules! process {
-    ($io:ident, $aux_mutex:ident, $ddma_mutex:ident, $subkernel_mutex:ident, $routing_table:ident, $tcp_stream:ident, $_destination: ident, $func:ident $(, $param:expr)*) => {{
+    ($io:ident, $_routing_table: ident, $tcp_stream:ident, $_destination: ident, $func:ident $(, $param:expr)*) => {{
         local_coremgmt::$func($io, $tcp_stream, $($param, )*)
     }}
 }
 
-fn worker(io: &Io, stream: &mut TcpStream, restart_idle: &Urc<Cell<bool>>,
-    _aux_mutex: &Mutex, _ddma_mutex: &Mutex, _subkernel_mutex: &Mutex,
+fn worker(io: &Io, stream: &mut TcpStream, restart_idle: &Urc<Cell<bool>>, 
     _routing_table: &RoutingTable) -> Result<(), Error<SchedError>> {
     read_magic(stream)?;
     let _destination = stream.read_u8()?;
@@ -634,38 +581,35 @@ fn worker(io: &Io, stream: &mut TcpStream, restart_idle: &Urc<Cell<bool>>,
 
     loop {
         match Request::read_from(stream)? {
-            Request::GetLog => process!(io, _aux_mutex, _ddma_mutex, _subkernel_mutex, _routing_table, stream, _destination, get_log),
-            Request::ClearLog => process!(io, _aux_mutex, _ddma_mutex, _subkernel_mutex, _routing_table, stream, _destination, clear_log),
-            Request::PullLog => process!(io, _aux_mutex, _ddma_mutex, _subkernel_mutex, _routing_table, stream, _destination, pull_log),
-            Request::SetLogFilter(level) => process!(io, _aux_mutex, _ddma_mutex, _subkernel_mutex, _routing_table, stream, _destination, set_log_filter, level),
-            Request::SetUartLogFilter(level) => process!(io, _aux_mutex, _ddma_mutex, _subkernel_mutex, _routing_table, stream, _destination, set_uart_log_filter, level),
-            Request::ConfigRead { ref key } => process!(io, _aux_mutex, _ddma_mutex, _subkernel_mutex, _routing_table, stream, _destination, config_read, key),
-            Request::ConfigWrite { ref key, ref value } => process!(io, _aux_mutex, _ddma_mutex, _subkernel_mutex, _routing_table, stream, _destination, config_write, key, value, restart_idle),
-            Request::ConfigRemove { ref key } => process!(io, _aux_mutex, _ddma_mutex, _subkernel_mutex, _routing_table, stream, _destination, config_remove, key, restart_idle),
-            Request::ConfigErase => process!(io, _aux_mutex, _ddma_mutex, _subkernel_mutex, _routing_table, stream, _destination, config_erase, restart_idle),
-            Request::Reboot => process!(io, _aux_mutex, _ddma_mutex, _subkernel_mutex, _routing_table, stream, _destination, reboot),
-            Request::DebugAllocator => process!(io, _aux_mutex, _ddma_mutex, _subkernel_mutex, _routing_table, stream, _destination, debug_allocator),
-            Request::Flash { ref image } => process!(io, _aux_mutex, _ddma_mutex, _subkernel_mutex, _routing_table, stream, _destination, flash, &image[..]),
+            Request::GetLog => process!(io, _routing_table, stream, _destination, get_log),
+            Request::ClearLog => process!(io, _routing_table, stream, _destination, clear_log),
+            Request::PullLog => process!(io, _routing_table, stream, _destination, pull_log),
+            Request::SetLogFilter(level) => process!(io, _routing_table, stream, _destination, set_log_filter, level),
+            Request::SetUartLogFilter(level) => process!(io, _routing_table, stream, _destination, set_uart_log_filter, level),
+            Request::ConfigRead { ref key } => process!(io, _routing_table, stream, _destination, config_read, key),
+            Request::ConfigWrite { ref key, ref value } => process!(io, _routing_table, stream, _destination, config_write, key, value, restart_idle),
+            Request::ConfigRemove { ref key } => process!(io, _routing_table, stream, _destination, config_remove, key, restart_idle),
+            Request::ConfigErase => process!(io, _routing_table, stream, _destination, config_erase, restart_idle),
+            Request::Reboot => process!(io, _routing_table, stream, _destination, reboot),
+            Request::DebugAllocator => process!(io, _routing_table, stream, _destination, debug_allocator),
+            Request::Flash { ref image } => process!(io, _routing_table, stream, _destination, flash, &image[..]),
         }?;
     }
 }
 
-pub fn thread(io: Io, restart_idle: &Urc<Cell<bool>>, aux_mutex: &Mutex, ddma_mutex: &Mutex, subkernel_mutex: &Mutex, routing_table: &Urc<RefCell<RoutingTable>>) {
+pub fn thread(io: Io, restart_idle: &Urc<Cell<bool>>, routing_table: &Urc<RefCell<RoutingTable>>) {
     let listener = TcpListener::new(&io, 8192);
     listener.listen(1380).expect("mgmt: cannot listen");
     info!("management interface active");
 
     loop {
         let restart_idle = restart_idle.clone();
-        let aux_mutex = aux_mutex.clone();
-        let ddma_mutex = ddma_mutex.clone();
-        let subkernel_mutex = subkernel_mutex.clone();
         let routing_table = routing_table.clone();
         let stream = listener.accept().expect("mgmt: cannot accept").into_handle();
         io.spawn(16384, move |io| {
             let routing_table = routing_table.borrow();
             let mut stream = TcpStream::from_handle(&io, stream);
-            match worker(&io, &mut stream, &restart_idle, &aux_mutex, &ddma_mutex, &subkernel_mutex, &routing_table) {
+            match worker(&io, &mut stream, &restart_idle, &routing_table) {
                 Ok(()) => (),
                 Err(Error::Io(IoError::UnexpectedEnd)) => (),
                 Err(err) => error!("aborted: {}", err)

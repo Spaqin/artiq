@@ -702,79 +702,58 @@ fn process_kern_message(io: &Io, routing_table: &drtio_routing::RoutingTable,
             #[cfg(has_drtio)]
             &kern::SubkernelMsgRecvRequest { id, timeout, tags } => {
                 let message_received = subkernel::message_await(io, _subkernel_mutex, id as u32, timeout);
-                let (status, count) = match message_received {
-                    Ok(ref message) => (kern::SubkernelStatus::NoError, message.count),
-                    Err(SubkernelError::Timeout) => (kern::SubkernelStatus::Timeout, 0),
-                    Err(SubkernelError::IncorrectState) => (kern::SubkernelStatus::IncorrectState, 0),
-                    Err(SubkernelError::SubkernelFinished) => {
-                        let res = subkernel::retrieve_finish_status(io, _subkernel_mutex, id as u32)?;
-                        if res.comm_lost {
-                            (kern::SubkernelStatus::CommLost, 0)
-                        } else if let Some(exception) = &res.exception {
-                            propagate_subkernel_exception!(exception, stream);
-                            (kern::SubkernelStatus::OtherError, 0)
-                        } else {
-                            kern_send(io,
-                                &kern::SubkernelError(kern::SubkernelStatus::OtherError))?;
-                        }
-                    } else {
-                        kern_send(io,
-                            &kern::SubkernelError(kern::SubkernelStatus::OtherError))?;
-                    }
-                } else {
-                    let message = match message_received {
-                        Ok(ref message) => kern::SubkernelMsgRecvReply { count: message.count },
-                        Err(SubkernelError::Timeout) => kern::SubkernelError(kern::SubkernelStatus::Timeout),
-                        Err(SubkernelError::IncorrectState) => kern::SubkernelError(kern::SubkernelStatus::IncorrectState),
-                        Err(SubkernelError::SubkernelFinished) => unreachable!(), // taken care of above
-                        Err(_) => kern::SubkernelError(kern::SubkernelStatus::OtherError)
-                    };
-                    kern_send(io, &message)?;
-                    if let Ok(message) = message_received {
-                        // receive code almost identical to RPC recv, except we are not reading from a stream
-                        let mut reader = Cursor::new(message.data);
-                        let mut current_tags = tags;
-                        let mut i = 0;
-                        loop {
-                            // kernel has to consume all arguments in the whole message
-                            let slot = kern_recv(io, |reply| {
+                let message = match message_received {
+                    Ok(ref message) => kern::SubkernelMsgRecvReply { count: message.count },
+                    Err(SubkernelError::Timeout) => kern::SubkernelError(kern::SubkernelStatus::Timeout),
+                    Err(SubkernelError::IncorrectState) => kern::SubkernelError(kern::SubkernelStatus::IncorrectState),
+                    Err(SubkernelError::SubkernelFinished) => unreachable!(), // taken care of above
+                    Err(_) => kern::SubkernelError(kern::SubkernelStatus::OtherError)
+                };
+                kern_send(io, &message)?;
+                if let Ok(message) = message_received {
+                    // receive code almost identical to RPC recv, except we are not reading from a stream
+                    let mut reader = Cursor::new(message.data);
+                    let mut current_tags = tags;
+                    let mut i = 0;
+                    loop {
+                        // kernel has to consume all arguments in the whole message
+                        let slot = kern_recv(io, |reply| {
+                            match reply {
+                                &kern::RpcRecvRequest(slot) => Ok(slot),
+                                other => unexpected!(
+                                    "expected root value slot from kernel CPU, not {:?}", other)
+                            }
+                        })?;
+                        let res = rpc::recv_return(&mut reader, current_tags, slot, &|size| -> Result<_, Error<SchedError>> {
+                            if size == 0 {
+                                return Ok(0 as *mut ())
+                            }
+                            kern_send(io, &kern::RpcRecvReply(Ok(size)))?;
+                            Ok(kern_recv(io, |reply| {
                                 match reply {
                                     &kern::RpcRecvRequest(slot) => Ok(slot),
                                     other => unexpected!(
-                                        "expected root value slot from kernel CPU, not {:?}", other)
+                                        "expected nested value slot from kernel CPU, not {:?}", other)
                                 }
-                            })?;
-                            let res = rpc::recv_return(&mut reader, current_tags, slot, &|size| -> Result<_, Error<SchedError>> {
-                                if size == 0 {
-                                    return Ok(0 as *mut ())
+                            })?)
+                        });
+                        match res {
+                            Ok(new_tags) => {
+                                kern_send(io, &kern::RpcRecvReply(Ok(0)))?;
+                                i += 1;
+                                if i < message.count {
+                                    // update the tag for next read
+                                    current_tags = new_tags;
+                                } else {
+                                    // should be done by then
+                                    break;
                                 }
-                                kern_send(io, &kern::RpcRecvReply(Ok(size)))?;
-                                Ok(kern_recv(io, |reply| {
-                                    match reply {
-                                        &kern::RpcRecvRequest(slot) => Ok(slot),
-                                        other => unexpected!(
-                                            "expected nested value slot from kernel CPU, not {:?}", other)
-                                    }
-                                })?)
-                            });
-                            match res {
-                                Ok(new_tags) => {
-                                    kern_send(io, &kern::RpcRecvReply(Ok(0)))?;
-                                    i += 1;
-                                    if i < message.count {
-                                        // update the tag for next read
-                                        current_tags = new_tags;
-                                    } else {
-                                        // should be done by then
-                                        break;
-                                    }
-                                },
-                                Err(_) => unexpected!("expected valid subkernel message data")
-                            };
-                        }
+                            },
+                            Err(_) => unexpected!("expected valid subkernel message data")
+                        };
                     }
-                    // if timed out, no data has been received, exception should be raised by kernel
                 }
+                // if timed out, no data has been received, exception should be raised by kernel
                 Ok(())
             },
 
