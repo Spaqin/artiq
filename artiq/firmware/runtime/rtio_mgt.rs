@@ -19,7 +19,7 @@ pub mod drtio {
     #[cfg(has_drtio_eem)]
     use board_artiq::drtio_eem;
     use drtioaux;
-    use proto_artiq::drtioaux_proto::{MASTER_PAYLOAD_MAX_SIZE, PayloadStatus};
+    use proto_artiq::drtioaux_proto::{DRTIO_ID_PAYLOAD_SIZE, PayloadStatus};
     use rtio_dma::remote_dma;
     use kernel::subkernel;
     use sched::{Error as SchedError, BinarySemaphore};
@@ -773,11 +773,11 @@ pub mod drtio {
     }
 
     pub fn partition_data<F>(data: &[u8], send_f: F) -> Result<(), Error>
-        where F: Fn(&[u8; MASTER_PAYLOAD_MAX_SIZE], PayloadStatus, usize) -> Result<(), Error> {
+        where F: Fn(&[u8; DRTIO_ID_PAYLOAD_SIZE], PayloadStatus, usize) -> Result<(), Error> {
         let mut i = 0;
         while i < data.len() {
-            let mut slice: [u8; MASTER_PAYLOAD_MAX_SIZE] = [0; MASTER_PAYLOAD_MAX_SIZE];
-            let len: usize = if i + MASTER_PAYLOAD_MAX_SIZE < data.len() { MASTER_PAYLOAD_MAX_SIZE } else { data.len() - i } as usize;
+            let mut slice: [u8; DRTIO_ID_PAYLOAD_SIZE] = [0; DRTIO_ID_PAYLOAD_SIZE];
+            let len: usize = if i + DRTIO_ID_PAYLOAD_SIZE < data.len() { DRTIO_ID_PAYLOAD_SIZE } else { data.len() - i } as usize;
             let first = i == 0;
             let last = i + len == data.len();
             let status = PayloadStatus::from_status(first, last);

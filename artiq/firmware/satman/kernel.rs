@@ -17,8 +17,8 @@ use ::{cricon_select, RtioMaster};
 use cache::Cache;
 use dma::{Manager as DmaManager, Error as DmaError};
 use aux::{AuxManager, Sliceable, SliceMeta, Error as AuxError};
-use SAT_PAYLOAD_MAX_SIZE;
-use MASTER_PAYLOAD_MAX_SIZE;
+use DRTIO_PAYLOAD_SIZE;
+use DRTIO_ID_PAYLOAD_SIZE;
 
 mod kernel_cpu {
     use super::*;
@@ -181,7 +181,7 @@ impl MessageManager {
         }
     }
 
-    pub fn handle_incoming(&mut self, status: PayloadStatus, length: usize, id: u32, data: &[u8; MASTER_PAYLOAD_MAX_SIZE]) {
+    pub fn handle_incoming(&mut self, status: PayloadStatus, length: usize, id: u32, data: &[u8; DRTIO_ID_PAYLOAD_SIZE]) {
         // called when receiving a message from master
         if status.is_first() {
             // clear the buffer for first message
@@ -203,11 +203,11 @@ impl MessageManager {
         }
     }
 
-    pub fn get_outgoing_slice(&mut self, data_slice: &mut [u8; MASTER_PAYLOAD_MAX_SIZE]) -> Option<SliceMeta> {
+    pub fn get_outgoing_slice(&mut self, data_slice: &mut [u8; DRTIO_ID_PAYLOAD_SIZE]) -> Option<SliceMeta> {
         if self.out_state != OutMessageState::MessageBeingSent {
             return None;
         }
-        let meta = self.out_message.as_mut()?.get_slice_master(data_slice);
+        let meta = self.out_message.as_mut()?.get_slice_id(data_slice);
         if meta.status.is_last() {
             // clear the message slot
             self.out_message = None;
@@ -242,7 +242,7 @@ impl MessageManager {
         data[0] = count;
         self.out_message = Some(Sliceable::new(destination, data));
 
-        let mut data_slice: [u8; MASTER_PAYLOAD_MAX_SIZE] = [0; MASTER_PAYLOAD_MAX_SIZE];
+        let mut data_slice: [u8; DRTIO_ID_PAYLOAD_SIZE] = [0; DRTIO_ID_PAYLOAD_SIZE];
         self.out_state = OutMessageState::MessageBeingSent;
         let meta = self.get_outgoing_slice(&mut data_slice).unwrap();
         let transaction_id = aux_mgr.transact(destination, drtioaux::Payload::SubkernelMessage {
@@ -364,7 +364,7 @@ impl Manager {
         kern_send(&kern::UpdateNow(timestamp))
     }
 
-    pub fn message_handle_incoming(&mut self, status: PayloadStatus, length: usize, id: u32, slice: &[u8; MASTER_PAYLOAD_MAX_SIZE]) {
+    pub fn message_handle_incoming(&mut self, status: PayloadStatus, length: usize, id: u32, slice: &[u8; DRTIO_ID_PAYLOAD_SIZE]) {
         if !self.is_running() {
             return;
         }
@@ -405,9 +405,9 @@ impl Manager {
         }
     }
 
-    pub fn exception_get_slice(&mut self, data_slice: &mut [u8; SAT_PAYLOAD_MAX_SIZE]) -> SliceMeta {
+    pub fn exception_get_slice(&mut self, data_slice: &mut [u8; DRTIO_PAYLOAD_SIZE]) -> SliceMeta {
         match self.session.last_exception.as_mut() {
-            Some(exception) => exception.get_slice_sat(data_slice),
+            Some(exception) => exception.get_slice_no_id(data_slice),
             None => SliceMeta { destination: 0, len: 0, status: PayloadStatus::FirstAndLast }
         }
     }
@@ -547,7 +547,7 @@ impl Manager {
                 match aux_mgr.check_transaction(*transaction_id)? {
                     Some(drtioaux::Payload::SubkernelMessageAck) => {
                         if self.session.messages.ack_slice() {
-                            let mut data_slice: [u8; MASTER_PAYLOAD_MAX_SIZE] = [0; MASTER_PAYLOAD_MAX_SIZE];
+                            let mut data_slice: [u8; DRTIO_ID_PAYLOAD_SIZE] = [0; DRTIO_ID_PAYLOAD_SIZE];
                             if let Some(meta) = self.session.messages.get_outgoing_slice(&mut data_slice) {
                                 let new_id = aux_mgr.transact(meta.destination, drtioaux::Payload::SubkernelMessage {
                                     id: self.current_id,

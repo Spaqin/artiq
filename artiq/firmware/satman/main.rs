@@ -28,7 +28,7 @@ use board_misoc::{boot, spiflash};
 use board_artiq::{spi, drtioaux};
 #[cfg(soc_platform = "efc")]
 use board_artiq::ad9117;
-use proto_artiq::drtioaux_proto::{SAT_PAYLOAD_MAX_SIZE, MASTER_PAYLOAD_MAX_SIZE};
+use proto_artiq::drtioaux_proto::{DRTIO_PAYLOAD_SIZE, DRTIO_ID_PAYLOAD_SIZE};
 #[cfg(has_drtio_eem)]
 use board_artiq::drtio_eem;
 use riscv::register::{mcause, mepc, mtval};
@@ -257,7 +257,7 @@ fn process_aux_packet(dmamgr: &mut DmaManager, analyzer: &mut Analyzer, kernelmg
         }
 
         drtioaux::Payload::AnalyzerDataRequest => {
-            let mut data_slice: [u8; SAT_PAYLOAD_MAX_SIZE] = [0; SAT_PAYLOAD_MAX_SIZE];
+            let mut data_slice: [u8; DRTIO_PAYLOAD_SIZE] = [0; DRTIO_PAYLOAD_SIZE];
             let meta = analyzer.get_data(&mut data_slice);
             respond!(drtioaux::Payload::AnalyzerData {
                 last: meta.last,
@@ -308,7 +308,7 @@ fn process_aux_packet(dmamgr: &mut DmaManager, analyzer: &mut Analyzer, kernelmg
             kernelmgr.remote_subkernel_finished(id, with_exception, exception_src);
         }
         drtioaux::Payload::SubkernelExceptionRequest => {
-            let mut data_slice: [u8; SAT_PAYLOAD_MAX_SIZE] = [0; SAT_PAYLOAD_MAX_SIZE];
+            let mut data_slice: [u8; DRTIO_PAYLOAD_SIZE] = [0; DRTIO_PAYLOAD_SIZE];
             let meta = kernelmgr.exception_get_slice(&mut data_slice);
             respond!(drtioaux::Payload::SubkernelException {
                 last: meta.status.is_last(),
@@ -321,7 +321,7 @@ fn process_aux_packet(dmamgr: &mut DmaManager, analyzer: &mut Analyzer, kernelmg
         }
 
         drtioaux::Payload::CoreMgmtGetLogRequest { clear } => {
-            let mut data_slice = [0; SAT_PAYLOAD_MAX_SIZE];
+            let mut data_slice = [0; DRTIO_PAYLOAD_SIZE];
             if let Ok(meta) = coremgr.log_get_slice(&mut data_slice, clear) {
                 respond!(drtioaux::Payload::CoreMgmtGetLogReply {
                     last: meta.status.is_last(),
@@ -358,7 +358,7 @@ fn process_aux_packet(dmamgr: &mut DmaManager, analyzer: &mut Analyzer, kernelmg
             length,
             key,
         } => {
-            let mut value_slice = [0; SAT_PAYLOAD_MAX_SIZE];
+            let mut value_slice = [0; DRTIO_PAYLOAD_SIZE];
 
             let key_slice = &key[..length as usize];
             if !key_slice.is_ascii() {
@@ -380,7 +380,7 @@ fn process_aux_packet(dmamgr: &mut DmaManager, analyzer: &mut Analyzer, kernelmg
             }
         }
         drtioaux::Payload::CoreMgmtConfigReadContinue => {
-            let mut value_slice = [0; SAT_PAYLOAD_MAX_SIZE];
+            let mut value_slice = [0; DRTIO_PAYLOAD_SIZE];
             let meta = coremgr.get_config_value_slice(&mut value_slice);
             respond!(drtioaux::Payload::CoreMgmtConfigReadReply {
                 length: meta.len as u16,

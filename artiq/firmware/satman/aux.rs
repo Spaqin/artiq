@@ -2,7 +2,7 @@ use alloc::{boxed::Box, collections::BTreeMap, vec::Vec};
 use core::{cmp::min, cell::RefCell};
 use board_misoc::{csr, clock};
 use board_artiq::{drtioaux, drtio_routing};
-use proto_artiq::drtioaux_proto::{MASTER_PAYLOAD_MAX_SIZE, SAT_PAYLOAD_MAX_SIZE, PayloadStatus};
+use proto_artiq::drtioaux_proto::{DRTIO_ID_PAYLOAD_SIZE, DRTIO_PAYLOAD_SIZE, PayloadStatus};
 
 use repeater;
 use drtiosat_tsc_loaded;
@@ -63,8 +63,8 @@ impl Sliceable {
         self.data.extend(data);
     }
 
-    get_slice_fn!(get_slice_sat, SAT_PAYLOAD_MAX_SIZE);
-    get_slice_fn!(get_slice_master, MASTER_PAYLOAD_MAX_SIZE);
+    get_slice_fn!(get_slice_no_id, DRTIO_PAYLOAD_SIZE);
+    get_slice_fn!(get_slice_id, DRTIO_ID_PAYLOAD_SIZE);
 }
 
 #[derive(Debug)]

@@ -93,7 +93,7 @@ pub fn validate(ptr: usize) -> bool {
 pub mod subkernel {
     use alloc::{vec::Vec, collections::btree_map::BTreeMap};
     use board_misoc::clock;
-    use proto_artiq::{drtioaux_proto::{Payload, PayloadStatus, MASTER_PAYLOAD_MAX_SIZE}, rpc_proto as rpc};
+    use proto_artiq::{drtioaux_proto::{Payload, PayloadStatus, DRTIO_ID_PAYLOAD_SIZE}, rpc_proto as rpc};
     use io::{Cursor, ProtoRead};
     use eh::eh_artiq::Exception;
     use cslice::CSlice;
@@ -366,7 +366,7 @@ pub mod subkernel {
     static mut CURRENT_MESSAGES: BTreeMap<u32, Message> = BTreeMap::new();
 
     pub fn message_handle_incoming(io: &Io, subkernel_mutex: &Mutex, 
-        id: u32, status: PayloadStatus, length: usize, data: &[u8; MASTER_PAYLOAD_MAX_SIZE]) {
+        id: u32, status: PayloadStatus, length: usize, data: &[u8; DRTIO_ID_PAYLOAD_SIZE]) {
         // called when receiving a message from satellite
         let _lock = match subkernel_mutex.lock(io) {
             Ok(lock) => lock,

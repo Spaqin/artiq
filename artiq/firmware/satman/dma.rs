@@ -5,7 +5,7 @@ use board_misoc::{csr, cache::flush_l2_cache};
 use proto_artiq::drtioaux_proto::PayloadStatus;
 use aux::{AuxManager, Sliceable};
 use kernel::Manager as KernelManager;
-use ::{cricon_select, cricon_read, RtioMaster, MASTER_PAYLOAD_MAX_SIZE};
+use ::{cricon_select, cricon_read, RtioMaster, DRTIO_ID_PAYLOAD_SIZE};
 
 const ALIGNMENT: usize = 64;
 
@@ -102,8 +102,8 @@ impl RemoteTraces {
             let mut ids: Vec<u8> = Vec::new();
             for (dest, trace) in self.remote_traces.iter_mut() {
                 // queue up the first packet for all destinations, rest will be sent after first ACK
-                let mut data_slice: [u8; MASTER_PAYLOAD_MAX_SIZE] = [0; MASTER_PAYLOAD_MAX_SIZE];
-                let meta = trace.get_slice_master(&mut data_slice);
+                let mut data_slice: [u8; DRTIO_ID_PAYLOAD_SIZE] = [0; DRTIO_ID_PAYLOAD_SIZE];
+                let meta = trace.get_slice_id(&mut data_slice);
                 let transaction_id = aux_mgr.transact(*dest, drtioaux::Payload::DmaAddTraceRequest {
                      id: id, status: meta.status, length: meta.len, trace: data_slice
                 }).unwrap();
@@ -123,8 +123,8 @@ impl RemoteTraces {
                 None
             } else {
                 // send next slice
-                let mut data_slice: [u8; MASTER_PAYLOAD_MAX_SIZE] = [0; MASTER_PAYLOAD_MAX_SIZE];
-                let meta = trace.get_slice_master(&mut data_slice);
+                let mut data_slice: [u8; DRTIO_ID_PAYLOAD_SIZE] = [0; DRTIO_ID_PAYLOAD_SIZE];
+                let meta = trace.get_slice_id(&mut data_slice);
                 let transaction_id = aux_mgr.transact(meta.destination, drtioaux::Payload::DmaAddTraceRequest {
                     id: id, status: meta.status, length: meta.len, trace: data_slice
                 }).unwrap();

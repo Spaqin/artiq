@@ -196,7 +196,7 @@ mod remote_coremgmt {
     use board_artiq::drtioaux::Payload;
     use io::ProtoWrite;
     use rtio_mgt::drtio;
-    use proto_artiq::drtioaux_proto::MASTER_PAYLOAD_MAX_SIZE;
+    use proto_artiq::drtioaux_proto::DRTIO_ID_PAYLOAD_SIZE;
 
     use super::*;
 
@@ -333,7 +333,7 @@ mod remote_coremgmt {
 
     pub fn config_read(io: &Io, destination: u8, stream: &mut TcpStream, key: &String
     ) -> Result<(), Error<SchedError>> {
-        let mut config_key: [u8; MASTER_PAYLOAD_MAX_SIZE] = [0; MASTER_PAYLOAD_MAX_SIZE];
+        let mut config_key: [u8; DRTIO_ID_PAYLOAD_SIZE] = [0; DRTIO_ID_PAYLOAD_SIZE];
         let len = key.len();
         config_key[..len].clone_from_slice(key.as_bytes());
 
@@ -406,7 +406,7 @@ mod remote_coremgmt {
 
     pub fn config_remove(io: &Io, destination: u8, stream: &mut TcpStream, key: &String,
         _restart_idle: &Urc<Cell<bool>>) -> Result<(), Error<SchedError>> {
-        let mut config_key: [u8; MASTER_PAYLOAD_MAX_SIZE] = [0; MASTER_PAYLOAD_MAX_SIZE];
+        let mut config_key: [u8; DRTIO_ID_PAYLOAD_SIZE] = [0; DRTIO_ID_PAYLOAD_SIZE];
         let len = key.len();
         config_key[..len].clone_from_slice(key.as_bytes());
 

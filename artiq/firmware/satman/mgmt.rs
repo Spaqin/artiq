@@ -7,7 +7,7 @@ use board_misoc::{mem, config, spiflash};
 use log::LevelFilter;
 use logger_artiq::BufferLogger;
 use io::{Cursor, ProtoRead, ProtoWrite};
-use proto_artiq::drtioaux_proto::SAT_PAYLOAD_MAX_SIZE;
+use proto_artiq::drtioaux_proto::DRTIO_PAYLOAD_SIZE;
 
 
 pub fn clear_log() -> Result<(), ()> {
@@ -55,7 +55,7 @@ impl Manager {
         )).map_err(|_err| warn!("read error: no such key"))
     }
 
-    pub fn log_get_slice(&mut self, data_slice: &mut [u8; SAT_PAYLOAD_MAX_SIZE], consume: bool) -> Result<SliceMeta, ()> {
+    pub fn log_get_slice(&mut self, data_slice: &mut [u8; DRTIO_PAYLOAD_SIZE], consume: bool) -> Result<SliceMeta, ()> {
         // Populate buffer if depleted
         if self.last_log.at_end() {
             BufferLogger::with(|logger| {
@@ -68,11 +68,11 @@ impl Manager {
             }).map_err(|()| error!("error on getting log buffer"))?;
         }
 
-        Ok(self.last_log.get_slice_sat(data_slice))
+        Ok(self.last_log.get_slice_no_id(data_slice))
     }
 
-    pub fn get_config_value_slice(&mut self, data_slice: &mut [u8; SAT_PAYLOAD_MAX_SIZE]) -> SliceMeta {
-        self.last_value.get_slice_sat(data_slice)
+    pub fn get_config_value_slice(&mut self, data_slice: &mut [u8; DRTIO_PAYLOAD_SIZE]) -> SliceMeta {
+        self.last_value.get_slice_no_id(data_slice)
     }
 
     pub fn add_config_data(&mut self, data: &[u8], data_len: usize) {

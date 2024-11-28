@@ -16,9 +16,9 @@ impl<T> From<IoError<T>> for Error<T> {
 
 // maximum size of arbitrary payloads
 // used by satellite -> master analyzer, subkernel exceptions
-pub const SAT_PAYLOAD_MAX_SIZE: usize  = /*max size*/1024 - /*header*/3 - /*CRC*/4 - /*packet ID*/1 - /*last*/1 - /*length*/2;
+pub const DRTIO_PAYLOAD_SIZE: usize  = /*max size*/1024 - /*header*/3 - /*CRC*/4 - /*packet ID*/1 - /*last*/1 - /*length*/2;
 // used by DDMA, subkernel program data (need to provide extra ID)
-pub const MASTER_PAYLOAD_MAX_SIZE: usize = SAT_PAYLOAD_MAX_SIZE - /*ID*/4;
+pub const DRTIO_ID_PAYLOAD_SIZE: usize = DRTIO_PAYLOAD_SIZE - /*ID*/4;
 
 #[derive(PartialEq, Clone, Copy, Debug)]
 #[repr(u8)]
@@ -134,11 +134,11 @@ pub enum Payload {
     AnalyzerHeaderRequest,
     AnalyzerHeader { sent_bytes: u32, total_byte_count: u64, overflow_occurred: bool },
     AnalyzerDataRequest,
-    AnalyzerData { last: bool, length: u16, data: [u8; SAT_PAYLOAD_MAX_SIZE]},
+    AnalyzerData { last: bool, length: u16, data: [u8; DRTIO_PAYLOAD_SIZE]},
 
     DmaAddTraceRequest { 
         id: u32, status: PayloadStatus,
-        length: u16, trace: [u8; MASTER_PAYLOAD_MAX_SIZE] 
+        length: u16, trace: [u8; DRTIO_ID_PAYLOAD_SIZE] 
     },
     DmaAddTraceReply { id: u32, succeeded: bool },
     DmaRemoveTraceRequest { id: u32 },
@@ -147,33 +147,33 @@ pub enum Payload {
     DmaPlaybackReply { succeeded: bool },
     DmaPlaybackStatus { id: u32, error: u8, channel: u32, timestamp: u64 },
 
-    SubkernelAddDataRequest { id: u32, status: PayloadStatus, length: u16, data: [u8; MASTER_PAYLOAD_MAX_SIZE] },
+    SubkernelAddDataRequest { id: u32, status: PayloadStatus, length: u16, data: [u8; DRTIO_ID_PAYLOAD_SIZE] },
     SubkernelAddDataReply { succeeded: bool },
     SubkernelLoadRunRequest { id: u32, run: bool, timestamp: u64 },
     SubkernelLoadRunReply { succeeded: bool },
     SubkernelFinished { id: u32, with_exception: bool, exception_src: u8 },
     SubkernelExceptionRequest,
-    SubkernelException { last: bool, length: u16, data: [u8; SAT_PAYLOAD_MAX_SIZE] },
-    SubkernelMessage { id: u32, status: PayloadStatus, length: u16, data: [u8; MASTER_PAYLOAD_MAX_SIZE] },
+    SubkernelException { last: bool, length: u16, data: [u8; DRTIO_PAYLOAD_SIZE] },
+    SubkernelMessage { id: u32, status: PayloadStatus, length: u16, data: [u8; DRTIO_ID_PAYLOAD_SIZE] },
     SubkernelMessageAck,
 
     CoreMgmtGetLogRequest { clear: bool },
     CoreMgmtClearLogRequest,
     CoreMgmtSetLogLevelRequest { log_level: u8 },
     CoreMgmtSetUartLogLevelRequest { log_level: u8 },
-    CoreMgmtConfigReadRequest { length: u16, key: [u8; MASTER_PAYLOAD_MAX_SIZE] },
+    CoreMgmtConfigReadRequest { length: u16, key: [u8; DRTIO_ID_PAYLOAD_SIZE] },
     CoreMgmtConfigReadContinue,
-    CoreMgmtConfigWriteRequest { last: bool, length: u16, data: [u8; MASTER_PAYLOAD_MAX_SIZE] },
-    CoreMgmtConfigRemoveRequest { length: u16, key: [u8; MASTER_PAYLOAD_MAX_SIZE] },
+    CoreMgmtConfigWriteRequest { last: bool, length: u16, data: [u8; DRTIO_ID_PAYLOAD_SIZE] },
+    CoreMgmtConfigRemoveRequest { length: u16, key: [u8; DRTIO_ID_PAYLOAD_SIZE] },
     CoreMgmtConfigEraseRequest,
     CoreMgmtRebootRequest,
     CoreMgmtAllocatorDebugRequest,
     CoreMgmtFlashRequest { payload_length: u32 },
-    CoreMgmtFlashAddDataRequest { last: bool, length: u16, data: [u8; MASTER_PAYLOAD_MAX_SIZE] },
+    CoreMgmtFlashAddDataRequest { last: bool, length: u16, data: [u8; DRTIO_ID_PAYLOAD_SIZE] },
     CoreMgmtDropLinkAck,
     CoreMgmtDropLink,
-    CoreMgmtGetLogReply { last: bool, length: u16, data: [u8; SAT_PAYLOAD_MAX_SIZE] },
-    CoreMgmtConfigReadReply { last: bool, length: u16, value: [u8; SAT_PAYLOAD_MAX_SIZE] },
+    CoreMgmtGetLogReply { last: bool, length: u16, data: [u8; DRTIO_PAYLOAD_SIZE] },
+    CoreMgmtConfigReadReply { last: bool, length: u16, value: [u8; DRTIO_PAYLOAD_SIZE] },
     CoreMgmtReply { succeeded: bool },
 }
 
@@ -302,7 +302,7 @@ impl Payload {
             0xa3 => {
                 let last = reader.read_bool()?;
                 let length = reader.read_u16()?;
-                let mut data: [u8; SAT_PAYLOAD_MAX_SIZE] = [0; SAT_PAYLOAD_MAX_SIZE];
+                let mut data: [u8; DRTIO_PAYLOAD_SIZE] = [0; DRTIO_PAYLOAD_SIZE];
                 reader.read_exact(&mut data[0..length as usize])?;
                 Payload::AnalyzerData {
                     last: last,
@@ -315,7 +315,7 @@ impl Payload {
                 let id = reader.read_u32()?;
                 let status = reader.read_u8()?;
                 let length = reader.read_u16()?;
-                let mut trace: [u8; MASTER_PAYLOAD_MAX_SIZE] = [0; MASTER_PAYLOAD_MAX_SIZE];
+                let mut trace: [u8; DRTIO_ID_PAYLOAD_SIZE] = [0; DRTIO_ID_PAYLOAD_SIZE];
                 reader.read_exact(&mut trace[0..length as usize])?;
                 Payload::DmaAddTraceRequest {
                     id: id,
@@ -352,7 +352,7 @@ impl Payload {
                 let id = reader.read_u32()?;
                 let status = reader.read_u8()?;
                 let length = reader.read_u16()?;
-                let mut data: [u8; MASTER_PAYLOAD_MAX_SIZE] = [0; MASTER_PAYLOAD_MAX_SIZE];
+                let mut data: [u8; DRTIO_ID_PAYLOAD_SIZE] = [0; DRTIO_ID_PAYLOAD_SIZE];
                 reader.read_exact(&mut data[0..length as usize])?;
                 Payload::SubkernelAddDataRequest {
                     id: id,
@@ -381,7 +381,7 @@ impl Payload {
             0xca => {
                 let last = reader.read_bool()?;
                 let length = reader.read_u16()?;
-                let mut data: [u8; SAT_PAYLOAD_MAX_SIZE] = [0; SAT_PAYLOAD_MAX_SIZE];
+                let mut data: [u8; DRTIO_PAYLOAD_SIZE] = [0; DRTIO_PAYLOAD_SIZE];
                 reader.read_exact(&mut data[0..length as usize])?;
                 Payload::SubkernelException {
                     last: last,
@@ -393,7 +393,7 @@ impl Payload {
                 let id = reader.read_u32()?;
                 let status = reader.read_u8()?;
                 let length = reader.read_u16()?;
-                let mut data: [u8; MASTER_PAYLOAD_MAX_SIZE] = [0; MASTER_PAYLOAD_MAX_SIZE];
+                let mut data: [u8; DRTIO_ID_PAYLOAD_SIZE] = [0; DRTIO_ID_PAYLOAD_SIZE];
                 reader.read_exact(&mut data[0..length as usize])?;
                 Payload::SubkernelMessage {
                     id: id,
@@ -416,7 +416,7 @@ impl Payload {
             },
             0xd4 => {
                 let length = reader.read_u16()?;
-                let mut key: [u8; MASTER_PAYLOAD_MAX_SIZE] = [0; MASTER_PAYLOAD_MAX_SIZE];
+                let mut key: [u8; DRTIO_ID_PAYLOAD_SIZE] = [0; DRTIO_ID_PAYLOAD_SIZE];
                 reader.read_exact(&mut key[0..length as usize])?;
                 Payload::CoreMgmtConfigReadRequest {
                     length: length,
@@ -427,7 +427,7 @@ impl Payload {
             0xd6 => {
                 let last = reader.read_bool()?;
                 let length = reader.read_u16()?;
-                let mut data: [u8; MASTER_PAYLOAD_MAX_SIZE] = [0; MASTER_PAYLOAD_MAX_SIZE];
+                let mut data: [u8; DRTIO_ID_PAYLOAD_SIZE] = [0; DRTIO_ID_PAYLOAD_SIZE];
                 reader.read_exact(&mut data[0..length as usize])?;
                 Payload::CoreMgmtConfigWriteRequest {
                     last: last,
@@ -437,7 +437,7 @@ impl Payload {
             },
             0xd7 => {
                 let length = reader.read_u16()?;
-                let mut key: [u8; MASTER_PAYLOAD_MAX_SIZE] = [0; MASTER_PAYLOAD_MAX_SIZE];
+                let mut key: [u8; DRTIO_ID_PAYLOAD_SIZE] = [0; DRTIO_ID_PAYLOAD_SIZE];
                 reader.read_exact(&mut key[0..length as usize])?;
                 Payload::CoreMgmtConfigRemoveRequest {
                     length: length,
@@ -453,7 +453,7 @@ impl Payload {
             0xdc => {
                 let last = reader.read_bool()?;
                 let length = reader.read_u16()?;
-                let mut data: [u8; MASTER_PAYLOAD_MAX_SIZE] = [0; MASTER_PAYLOAD_MAX_SIZE];
+                let mut data: [u8; DRTIO_ID_PAYLOAD_SIZE] = [0; DRTIO_ID_PAYLOAD_SIZE];
                 reader.read_exact(&mut data[0..length as usize])?;
                 Payload::CoreMgmtFlashAddDataRequest {
                     last: last,
@@ -466,7 +466,7 @@ impl Payload {
             0xdf => {
                 let last = reader.read_bool()?;
                 let length = reader.read_u16()?;
-                let mut data: [u8; SAT_PAYLOAD_MAX_SIZE] = [0; SAT_PAYLOAD_MAX_SIZE];
+                let mut data: [u8; DRTIO_PAYLOAD_SIZE] = [0; DRTIO_PAYLOAD_SIZE];
                 reader.read_exact(&mut data[0..length as usize])?;
                 Payload::CoreMgmtGetLogReply {
                     last: last,
@@ -477,7 +477,7 @@ impl Payload {
             0xe0 => {
                 let last = reader.read_bool()?;
                 let length = reader.read_u16()?;
-                let mut value: [u8; SAT_PAYLOAD_MAX_SIZE] = [0; SAT_PAYLOAD_MAX_SIZE];
+                let mut value: [u8; DRTIO_PAYLOAD_SIZE] = [0; DRTIO_PAYLOAD_SIZE];
                 reader.read_exact(&mut value[0..length as usize])?;
                 Payload::CoreMgmtConfigReadReply {
                     last: last,
