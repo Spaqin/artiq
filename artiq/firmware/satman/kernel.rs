@@ -69,7 +69,7 @@ enum KernelState {
     SubkernelAwaitFinish { max_time: i64, id: u32 },
     DmaUploading { id: u32, max_time: u64 },
     DmaAwait { id: u32, max_time: u64 },
-    SubkernelRetrievingException { destination: u8 },
+    SubkernelRetrievingException { destination: u8, transaction_id: u8 },
 }
 
 #[derive(Debug)]
@@ -405,9 +405,9 @@ impl Manager {
         }
     }
 
-    pub fn exception_get_slice(&mut self, data_slice: &mut [u8; MASTER_PAYLOAD_MAX_SIZE]) -> SliceMeta {
+    pub fn exception_get_slice(&mut self, data_slice: &mut [u8; SAT_PAYLOAD_MAX_SIZE]) -> SliceMeta {
         match self.session.last_exception.as_mut() {
-            Some(exception) => exception.get_slice_master(data_slice),
+            Some(exception) => exception.get_slice_sat(data_slice),
             None => SliceMeta { destination: 0, len: 0, status: PayloadStatus::FirstAndLast }
         }
     }
@@ -504,24 +504,24 @@ impl Manager {
         }
     }
 
-    fn check_finished_kernels(&mut self, id: u32, router: &mut Router, routing_table: &RoutingTable, rank: u8, self_destination: u8) {
+    fn check_finished_kernels(&mut self, id: u32, aux_mgr: &mut AuxManager) -> Result<(), Error> {
         for (i, (status, exception_source)) in self.session.subkernels_finished.iter().enumerate() {
             if *status == id {
-                if exception_source.is_none() {
-                    kern_send(&kern::SubkernelAwaitFinishReply).unwrap();
+                if let Some(destination) = exception_source {
+                    self.session.external_exception = Vec::new();
+                    let transaction_id = aux_mgr.transact(*destination, drtioaux::Payload::SubkernelExceptionRequest)?;
+                    self.session.kernel_state = KernelState::SubkernelRetrievingException { 
+                        destination: *destination, transaction_id
+                    };
+                } else {
+                    kern_send(&kern::SubkernelAwaitFinishReply)?;
                     self.session.kernel_state = KernelState::Running;
                     self.session.subkernels_finished.swap_remove(i);
-                } else {
-                    let destination = exception_source.unwrap();
-                    self.session.external_exception = Vec::new();
-                    self.session.kernel_state = KernelState::SubkernelRetrievingException { destination: destination };
-                    router.route(drtioaux::Packet::SubkernelExceptionRequest {
-                        source: self_destination, destination: destination
-                    }, &routing_table, rank, self_destination);
                 }
-                break;
+                return Ok(())
             }
         }
+        Ok(())
     }
 
     fn process_external_messages(&mut self, aux_mgr: &mut AuxManager, dma_mgr: &mut DmaManager) -> Result<(), Error> {
@@ -539,7 +539,7 @@ impl Manager {
                     pass_message_to_kernel(&message, &tags)
                 } else {
                     let id = *id;
-                    self.check_finished_kernels(id, router, routing_table, rank, self_destination);
+                    self.check_finished_kernels(id, aux_mgr)?;
                     Err(Error::AwaitingMessage)
                 }
             },
@@ -575,7 +575,7 @@ impl Manager {
                     self.session.kernel_state = KernelState::Running;
                 } else {
                     let id = *id;
-                    self.check_finished_kernels(id, router, routing_table, rank, self_destination);
+                    self.check_finished_kernels(id, aux_mgr)?;
                 }
                 Ok(())
             }
@@ -628,6 +628,38 @@ impl Manager {
                     None => Ok(()),
                 }
             }
+            KernelState::SubkernelRetrievingException { destination, transaction_id } => {
+                match aux_mgr.check_transaction(*transaction_id)? {
+                    Some(drtioaux::Payload::SubkernelException { last, length, data }) => {
+                        self.session.external_exception.extend_from_slice(&data[..(length as usize)]);
+                        if last {
+                            if let Ok(exception) = read_exception(&self.session.external_exception) {
+                                kern_send(&kern::SubkernelError(kern::SubkernelStatus::Exception(exception))).unwrap();
+                            } else {
+                                kern_send(
+                                    &kern::SubkernelError(kern::SubkernelStatus::OtherError)).unwrap();
+                            }
+                            self.session.kernel_state = KernelState::Running;
+                        } else {
+                            /* fetch another slice */
+                            let new_id = aux_mgr.transact(
+                                *destination,
+                                drtioaux::Payload::SubkernelExceptionRequest
+                            )?;
+                            self.session.kernel_state = KernelState::SubkernelRetrievingException {
+                                destination: *destination,
+                                transaction_id: new_id
+                            };
+                        }
+                        Ok(())
+                    }
+                    Some(p) => {
+                        error!("subkernel exception request received unexpected reply: {:?}", p);
+                        Err(Error::UnexpectedMessage(p))
+                    }
+                    None => Ok(()),
+                }
+            }
             _ => Ok(())
         }
     }
@@ -635,29 +667,6 @@ impl Manager {
     pub fn remote_subkernel_finished(&mut self, id: u32, with_exception: bool, exception_source: u8) {
         let exception_src = if with_exception { Some(exception_source) } else { None };
         self.session.subkernels_finished.push((id, exception_src));
-    }
-
-    pub fn received_exception(&mut self, exception_data: &[u8], last: bool, router: &mut Router, routing_table: &RoutingTable,
-        rank: u8, self_destination: u8) {
-        if let KernelState::SubkernelRetrievingException { destination } = self.session.kernel_state {
-            self.session.external_exception.extend_from_slice(exception_data);
-            if last {
-                if let Ok(exception) = read_exception(&self.session.external_exception) {
-                    kern_send(&kern::SubkernelError(kern::SubkernelStatus::Exception(exception))).unwrap();
-                } else {
-                    kern_send(
-                        &kern::SubkernelError(kern::SubkernelStatus::OtherError)).unwrap();
-                }
-                self.session.kernel_state = KernelState::Running;
-            } else {
-                /* fetch another slice */
-                router.route(drtioaux::Packet::SubkernelExceptionRequest {
-                    source: self_destination, destination: destination
-                }, routing_table, rank, self_destination);
-            }
-        } else {
-            warn!("Received unsolicited exception data");
-        }
     }
 
     fn process_kern_message(&mut self, aux_mgr: &mut AuxManager, dma_mgr: &mut DmaManager
@@ -809,9 +818,9 @@ impl Manager {
                     Ok(())
                 },
 
-                &kern::SubkernelLoadRunRequest { id, destination, run } => {                    
+                &kern::SubkernelLoadRunRequest { id, destination, run, timestamp } => {                    
                     let transaction_id = aux_mgr.transact(destination, drtioaux::Payload::SubkernelLoadRunRequest { 
-                        id: id, run: run
+                        id, run, timestamp
                     })?;
                     self.session.kernel_state = KernelState::SubkernelAwaitLoad { transaction_id: transaction_id };
                     Ok(())

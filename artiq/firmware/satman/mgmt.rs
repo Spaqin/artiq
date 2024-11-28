@@ -2,8 +2,7 @@ use alloc::vec::Vec;
 use byteorder::{ByteOrder, NativeEndian};
 use crc::crc32;
 
-use routing::{Sliceable, SliceMeta};
-use board_artiq::drtioaux;
+use aux::{Sliceable, SliceMeta};
 use board_misoc::{mem, config, spiflash};
 use log::LevelFilter;
 use logger_artiq::BufferLogger;
@@ -69,11 +68,11 @@ impl Manager {
             }).map_err(|()| error!("error on getting log buffer"))?;
         }
 
-        Ok(self.last_log.get_slice_satellite(data_slice))
+        Ok(self.last_log.get_slice_sat(data_slice))
     }
 
     pub fn get_config_value_slice(&mut self, data_slice: &mut [u8; SAT_PAYLOAD_MAX_SIZE]) -> SliceMeta {
-        self.last_value.get_slice_satellite(data_slice)
+        self.last_value.get_slice_sat(data_slice)
     }
 
     pub fn add_config_data(&mut self, data: &[u8], data_len: usize) {
@@ -85,13 +84,13 @@ impl Manager {
         self.config_payload.set_position(0);
     }
 
-    pub fn write_config(&mut self) -> Result<(), drtioaux::Error<!>> {
+    pub fn write_config(&mut self) -> bool {
         let key = match self.config_payload.read_string() {
             Ok(key) => key,
             Err(err) => {
                 self.clear_config_data();
                 error!("error on reading key: {:?}", err);
-                return drtioaux::send(0, &drtioaux::Packet::CoreMgmtReply { succeeded: false });
+                return false;
             }
         };
 
@@ -103,7 +102,7 @@ impl Manager {
 
         self.clear_config_data();
 
-        drtioaux::send(0, &drtioaux::Packet::CoreMgmtReply { succeeded })
+        succeeded
     }
 
     pub fn allocate_image_buffer(&mut self, image_size: usize) {

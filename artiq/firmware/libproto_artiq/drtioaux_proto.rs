@@ -17,7 +17,7 @@ impl<T> From<IoError<T>> for Error<T> {
 // maximum size of arbitrary payloads
 // used by satellite -> master analyzer, subkernel exceptions
 pub const SAT_PAYLOAD_MAX_SIZE: usize  = /*max size*/1024 - /*header*/3 - /*CRC*/4 - /*packet ID*/1 - /*last*/1 - /*length*/2;
-// used by DDMA, subkernel program data (need to provide extra ID and destination)
+// used by DDMA, subkernel program data (need to provide extra ID)
 pub const MASTER_PAYLOAD_MAX_SIZE: usize = SAT_PAYLOAD_MAX_SIZE - /*ID*/4;
 
 #[derive(PartialEq, Clone, Copy, Debug)]

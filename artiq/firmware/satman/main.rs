@@ -1,4 +1,4 @@
-#![feature(never_type, panic_info_message, llvm_asm, default_alloc_error_handler, try_trait, btree_retain, const_in_array_repeat_expressions)]
+#![feature(never_type, panic_info_message, llvm_asm, default_alloc_error_handler)]
 #![no_std]
 
 #[macro_use]
@@ -25,7 +25,7 @@ use board_artiq::si549;
 #[cfg(soc_platform = "kasli")]
 use board_misoc::irq;
 use board_misoc::{boot, spiflash};
-use board_artiq::{spi, drtioaux, drtio_routing};
+use board_artiq::{spi, drtioaux};
 #[cfg(soc_platform = "efc")]
 use board_artiq::ad9117;
 use proto_artiq::drtioaux_proto::{SAT_PAYLOAD_MAX_SIZE, MASTER_PAYLOAD_MAX_SIZE};
@@ -109,11 +109,11 @@ pub fn cricon_read() -> RtioMaster {
 }
 
 fn process_aux_packet(dmamgr: &mut DmaManager, analyzer: &mut Analyzer, kernelmgr: &mut KernelManager,
-        _repeaters: &mut [repeater::Repeater], aux_mgr: &mut aux::AuxManager,
+        _repeaters: &mut [repeater::Repeater], aux_mgr: &mut aux::AuxManager, coremgr: &mut CoreManager,
         packet: &drtioaux::Payload, transaction_id: u8, source: u8) {
     macro_rules! respond {
         ( $packet:expr ) => {
-            aux_mgr.respond(transaction_id, source, &$packet);
+            aux_mgr.respond(transaction_id, source, &$packet)
         }
     }
     match *packet {
@@ -146,57 +146,6 @@ fn process_aux_packet(dmamgr: &mut DmaManager, analyzer: &mut Analyzer, kernelmg
             } else {
                 respond!(drtioaux::Payload::DestinationOkReply)
             }
-
-            #[cfg(has_drtio_routing)]
-            {
-                if hop != 0 {
-                    let hop = hop as usize;
-                    if hop <= csr::DRTIOREP.len() {
-                        let repno = hop - 1;
-                        match _repeaters[repno].aux_forward(&drtioaux::Payload::DestinationStatusRequest {
-                            destination: destination
-                        }, router, _routing_table, *rank, *self_destination) {
-                            Ok(()) => (),
-                            Err(drtioaux::Error::LinkDown) => drtioaux::send(0, &drtioaux::Payload::DestinationDownReply)?,
-                            Err(e) => {
-                                drtioaux::send(0, &drtioaux::Payload::DestinationDownReply)?;
-                                error!("aux error when handling destination status request: {}", e);
-                            },
-                        }
-                    } else {
-                        drtioaux::send(0, &drtioaux::Payload::DestinationDownReply)?;
-                    }
-                }
-            }
-            Ok(())
-        }
-
-        #[cfg(has_drtio_routing)]
-        drtioaux::Payload::RoutingSetPath { destination, hops } => {
-            _routing_table.0[destination as usize] = hops;
-            for rep in _repeaters.iter() {
-                if let Err(e) = rep.set_path(destination, &hops) {
-                    error!("failed to set path ({})", e);
-                }
-            }
-            drtioaux::send(0, &drtioaux::Payload::RoutingAck)
-        }
-        #[cfg(has_drtio_routing)]
-        drtioaux::Payload::RoutingSetRank { rank: new_rank } => {
-            *rank = new_rank;
-            drtio_routing::interconnect_enable_all(_routing_table, new_rank);
-
-            let rep_rank = new_rank + 1;
-            for rep in _repeaters.iter() {
-                if let Err(e) = rep.set_rank(rep_rank) {
-                    error!("failed to set rank ({})", e);
-                }
-            }
-
-            info!("rank: {}", new_rank);
-            info!("routing table: {}", _routing_table);
-
-            drtioaux::send(0, &drtioaux::Payload::RoutingAck)
         }
 
         #[cfg(not(has_drtio_routing))]
@@ -248,15 +197,15 @@ fn process_aux_packet(dmamgr: &mut DmaManager, analyzer: &mut Analyzer, kernelmg
 
         drtioaux::Payload::I2cStartRequest { busno } => {
             let succeeded = i2c::start(busno).is_ok();
-            respond!(drtioaux::Payload::I2cBasicReply { succeeded: succeeded })
+            respond!(drtioaux::Payload::I2cBasicReply { succeeded })
         }
         drtioaux::Payload::I2cRestartRequest { busno } => {
             let succeeded = i2c::restart(busno).is_ok();
-            respond!(drtioaux::Payload::I2cBasicReply { succeeded: succeeded })
+            respond!(drtioaux::Payload::I2cBasicReply { succeeded })
         }
         drtioaux::Payload::I2cStopRequest { busno } => {
             let succeeded = i2c::stop(busno).is_ok();
-            respond!(drtioaux::Payload::I2cBasicReply { succeeded: succeeded })
+            respond!(drtioaux::Payload::I2cBasicReply { succeeded })
         }
         drtioaux::Payload::I2cWriteRequest { busno, data } => {
             match i2c::write(busno, data) {
@@ -276,18 +225,18 @@ fn process_aux_packet(dmamgr: &mut DmaManager, analyzer: &mut Analyzer, kernelmg
         }
         drtioaux::Payload::I2cSwitchSelectRequest { busno, address, mask } => {
             let succeeded = i2c::switch_select(busno, address, mask).is_ok();
-            respond!(drtioaux::Payload::I2cBasicReply { succeeded: succeeded })
+            respond!(drtioaux::Payload::I2cBasicReply { succeeded })
         }
 
         drtioaux::Payload::SpiSetConfigRequest { busno, flags, length, div, cs } => {
             let succeeded = spi::set_config(busno, flags, length, div, cs).is_ok();
             respond!(
-                drtioaux::Payload::SpiBasicReply { succeeded: succeeded })
+                drtioaux::Payload::SpiBasicReply { succeeded })
         },
         drtioaux::Payload::SpiWriteRequest { busno, data } => {
             let succeeded = spi::write(busno, data).is_ok();
             respond!(
-                drtioaux::Payload::SpiBasicReply { succeeded: succeeded })
+                drtioaux::Payload::SpiBasicReply { succeeded })
         }
         drtioaux::Payload::SpiReadRequest { busno } => {
             match spi::read(busno) {
@@ -332,9 +281,7 @@ fn process_aux_packet(dmamgr: &mut DmaManager, analyzer: &mut Analyzer, kernelmg
         drtioaux::Payload::DmaPlaybackRequest { id, timestamp } => {
             // no DMA with a running kernel
             let succeeded = !kernelmgr.is_running() && dmamgr.playback(source, id, timestamp).is_ok();
-            respond!(drtioaux::Payload::DmaPlaybackReply { 
-                succeeded: succeeded
-            })
+            respond!(drtioaux::Payload::DmaPlaybackReply { succeeded })
         }
         drtioaux::Payload::DmaPlaybackStatus { id, error, channel, timestamp } => {
             dmamgr.remote_finished(kernelmgr, id, error, channel, timestamp);
@@ -342,9 +289,9 @@ fn process_aux_packet(dmamgr: &mut DmaManager, analyzer: &mut Analyzer, kernelmg
 
         drtioaux::Payload::SubkernelAddDataRequest { id, status, length, data } => {
             let succeeded = kernelmgr.add(id, status, &data, length as usize).is_ok();
-            respond!(drtioaux::Payload::SubkernelAddDataReply { succeeded: succeeded })
+            respond!(drtioaux::Payload::SubkernelAddDataReply { succeeded })
         }
-        drtioaux::Payload::SubkernelLoadRunRequest { id, run } => {
+        drtioaux::Payload::SubkernelLoadRunRequest { id, run, timestamp } => {
             let mut succeeded = kernelmgr.load(id).is_ok();
             // allow preloading a kernel with delayed run
             if run {
@@ -355,7 +302,7 @@ fn process_aux_packet(dmamgr: &mut DmaManager, analyzer: &mut Analyzer, kernelmg
                     succeeded |= kernelmgr.run(source, id, timestamp).is_ok();
                 }
             }
-            respond!(drtioaux::Payload::SubkernelLoadRunReply { succeeded: succeeded })
+            respond!(drtioaux::Payload::SubkernelLoadRunReply { succeeded })
         }
         drtioaux::Payload::SubkernelFinished { id, with_exception, exception_src } => {
             kernelmgr.remote_subkernel_finished(id, with_exception, exception_src);
@@ -367,54 +314,34 @@ fn process_aux_packet(dmamgr: &mut DmaManager, analyzer: &mut Analyzer, kernelmg
                 last: meta.status.is_last(),
                 length: meta.len,
                 data: data_slice,
-            }, _routing_table, *rank, *self_destination)
+            })
         }
         drtioaux::Payload::SubkernelMessage { id, status, length, data } => {
             kernelmgr.message_handle_incoming(status, length as usize, id, &data);
-        }
-        drtioaux::Payload::SubkernelMessageAck => {
-            if kernelmgr.message_ack_slice() {
-                let mut data_slice: [u8; MASTER_PAYLOAD_MAX_SIZE] = [0; MASTER_PAYLOAD_MAX_SIZE];
-                if let Some(meta) = kernelmgr.message_get_slice(&mut data_slice) {
-                    // route and not send immediately as ACKs are not a beginning of a transaction
-                    router.route(drtioaux::Payload::SubkernelMessage {
-                        source: *self_destination, destination: meta.destination, id: kernelmgr.get_current_id().unwrap(),
-                        status: meta.status, length: meta.len as u16, data: data_slice
-                    }, _routing_table, *rank, *self_destination);
-                } else {
-                    error!("Error receiving message slice");
-                }
-            }
-            Ok(())
         }
 
         drtioaux::Payload::CoreMgmtGetLogRequest { clear } => {
             let mut data_slice = [0; SAT_PAYLOAD_MAX_SIZE];
             if let Ok(meta) = coremgr.log_get_slice(&mut data_slice, clear) {
-                drtioaux::send(
-                    0,
-                    &drtioaux::Payload::CoreMgmtGetLogReply {
-                        last: meta.status.is_last(),
-                        length: meta.len as u16,
-                        data: data_slice,
-                    },
-                )
+                respond!(drtioaux::Payload::CoreMgmtGetLogReply {
+                    last: meta.status.is_last(),
+                    length: meta.len as u16,
+                    data: data_slice,
+                })
             } else {
-                respond!(drtioaux::Payload::CoreMgmtReply { succeeded: false }, _routing_table, *rank, *self_destination)
+                respond!(drtioaux::Payload::CoreMgmtReply { succeeded: false })
             }
         }
         drtioaux::Payload::CoreMgmtClearLogRequest => {
-            respond!(&drtioaux::Payload::CoreMgmtReply { succeeded: mgmt::clear_log().is_ok() }, _routing_table, *rank, *self_destination)
+            respond!(&drtioaux::Payload::CoreMgmtReply { succeeded: mgmt::clear_log().is_ok() })
         }
         drtioaux::Payload::CoreMgmtSetLogLevelRequest { log_level } => {
-            forward!(router, _routing_table, _destination, *rank, *self_destination, _repeaters, &packet);
-
             if let Ok(level_filter) = mgmt::byte_to_level_filter(log_level) {
                 info!("changing log level to {}", level_filter);
                 log::set_max_level(level_filter);
-                respond!(drtioaux::Payload::CoreMgmtReply { succeeded: true }, _routing_table, *rank, *self_destination)
+                respond!(drtioaux::Payload::CoreMgmtReply { succeeded: true })
             } else {
-                respond!(drtioaux::Payload::CoreMgmtReply { succeeded: false }, _routing_table, *rank, *self_destination)
+                respond!(drtioaux::Payload::CoreMgmtReply { succeeded: false })
             }
         }
         drtioaux::Payload::CoreMgmtSetUartLogLevelRequest { log_level } => {
@@ -422,9 +349,9 @@ fn process_aux_packet(dmamgr: &mut DmaManager, analyzer: &mut Analyzer, kernelmg
                 info!("changing UART log level to {}", level_filter);
                 logger_artiq::BufferLogger::with(|logger|
                     logger.set_uart_log_level(level_filter));
-                respond!(drtioaux::Payload::CoreMgmtReply { succeeded: true }, _routing_table, *rank, *self_destination)
+                respond!(drtioaux::Payload::CoreMgmtReply { succeeded: true })
             } else {
-                respond!(drtioaux::Payload::CoreMgmtReply { succeeded: false }, _routing_table, *rank, *self_destination)
+                respond!(drtioaux::Payload::CoreMgmtReply { succeeded: false })
             }
         }
         drtioaux::Payload::CoreMgmtConfigReadRequest {
@@ -436,7 +363,7 @@ fn process_aux_packet(dmamgr: &mut DmaManager, analyzer: &mut Analyzer, kernelmg
             let key_slice = &key[..length as usize];
             if !key_slice.is_ascii() {
                 error!("invalid key");
-                respond!(drtioaux::Payload::CoreMgmtReply { succeeded: false }, _routing_table, *rank, *self_destination)
+                respond!(drtioaux::Payload::CoreMgmtReply { succeeded: false })
             } else {
                 let key = core::str::from_utf8(key_slice).unwrap();
                 if coremgr.fetch_config_value(key).is_ok() {
@@ -446,10 +373,9 @@ fn process_aux_packet(dmamgr: &mut DmaManager, analyzer: &mut Analyzer, kernelmg
                             length: meta.len as u16,
                             last: meta.status.is_last(),
                             value: value_slice,
-                        },
-                    _routing_table, *rank, *self_destination)
+                        })
                 } else {
-                    respond!(drtioaux::Payload::CoreMgmtReply { succeeded: false }, _routing_table, *rank, *self_destination)
+                    respond!(drtioaux::Payload::CoreMgmtReply { succeeded: false })
                 }
             }
         }
@@ -457,18 +383,17 @@ fn process_aux_packet(dmamgr: &mut DmaManager, analyzer: &mut Analyzer, kernelmg
             let mut value_slice = [0; SAT_PAYLOAD_MAX_SIZE];
             let meta = coremgr.get_config_value_slice(&mut value_slice);
             respond!(drtioaux::Payload::CoreMgmtConfigReadReply {
-                    length: meta.len as u16,
-                    last: meta.status.is_last(),
-                    value: value_slice,
-                },
-            _routing_table, *rank, *self_destination)
+                length: meta.len as u16,
+                last: meta.status.is_last(),
+                value: value_slice,
+            })
         }
         drtioaux::Payload::CoreMgmtConfigWriteRequest { last, length, data }  => {
             coremgr.add_config_data(&data, length as usize);
             if last {
-                coremgr.write_config()
+                respond!(drtioaux::Payload::CoreMgmtReply { succeeded: coremgr.write_config() })
             } else {
-                respond!(drtioaux::Payload::CoreMgmtReply { succeeded: true }, _routing_table, *rank, *self_destination)
+                respond!(drtioaux::Payload::CoreMgmtReply { succeeded: true })
             }
         }
         drtioaux::Payload::CoreMgmtConfigRemoveRequest { length, key } => {
@@ -477,30 +402,30 @@ fn process_aux_packet(dmamgr: &mut DmaManager, analyzer: &mut Analyzer, kernelmg
                 .map_err(|err| warn!("error on removing config: {:?}", err))
                 .is_ok();
 
-            respond!(drtioaux::Payload::CoreMgmtReply { succeeded }, _routing_table, *rank, *self_destination)
+            respond!(drtioaux::Payload::CoreMgmtReply { succeeded })
         }
         drtioaux::Payload::CoreMgmtConfigEraseRequest => {
             let succeeded = config::erase()
                 .map_err(|err| warn!("error on erasing config: {:?}", err))
                 .is_ok();
 
-            respond!(drtioaux::Payload::CoreMgmtReply { succeeded }, _routing_table, *rank, *self_destination)
+            respond!(drtioaux::Payload::CoreMgmtReply { succeeded })
         }
         drtioaux::Payload::CoreMgmtRebootRequest => {
-            respond!(drtioaux::Payload::CoreMgmtReply { succeeded: true }, _routing_table, *rank, *self_destination)?;
+            respond!(drtioaux::Payload::CoreMgmtReply { succeeded: true });
             warn!("restarting");
             unsafe { spiflash::reload(); }
         }
         drtioaux::Payload::CoreMgmtFlashRequest { payload_length } => {
             coremgr.allocate_image_buffer(payload_length as usize);
-            respond!(drtioaux::Payload::CoreMgmtReply { succeeded: true }, _routing_table, *rank, *self_destination)
+            respond!(drtioaux::Payload::CoreMgmtReply { succeeded: true })
         }
         drtioaux::Payload::CoreMgmtFlashAddDataRequest { last, length, data } => {
             coremgr.add_image_data(&data, length as usize);
             if last {
-                respond!(drtioaux::Payload::CoreMgmtDropLink, _routing_table, *rank, *self_destination)
+                respond!(drtioaux::Payload::CoreMgmtDropLink)
             } else {
-                respond!(drtioaux::Payload::CoreMgmtReply { succeeded: true }, _routing_table, *rank, *self_destination)
+                respond!(drtioaux::Payload::CoreMgmtReply { succeeded: true })
             }
         }
         drtioaux::Payload::CoreMgmtDropLinkAck => {
@@ -879,7 +804,7 @@ fn startup() {
             if let Some((transaction_id, source, packet)) = transaction {
                 process_aux_packet(&mut dma_manager, &mut analyzer,
                     &mut kernelmgr, &mut repeaters, &mut aux_mgr,
-                    &packet, transaction_id, source);
+                    &mut coremgr, &packet, transaction_id, source);
             }
 
             #[cfg(all(soc_platform = "kasli", hw_rev = "v2.0"))]

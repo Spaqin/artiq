@@ -1,7 +1,6 @@
 use board_artiq::{drtioaux, drtio_routing};
 #[cfg(has_drtio_routing)]
 use board_misoc::{csr, clock};
-use aux;
 
 #[cfg(has_drtio_routing)]
 fn rep_link_rx_up(repno: u8) -> bool {
@@ -191,38 +190,12 @@ impl Repeater {
         }
     }
 
-    pub fn aux_send(&mut self, current_time: u64, request: &drtioaux::Packet) -> Result<bool, drtioaux::Error<!>> {
+    pub fn aux_send(&mut self, request: &drtioaux::Packet) -> Result<(), drtioaux::Error<!>> {
         if RepeaterState::Up == self.state {
-            drtioaux::send(self.auxno, request)?;
+            drtioaux::send(self.auxno, request)
         } else {
             Err(drtioaux::Error::LinkDown)
         }
-    }
-
-    pub fn aux_forward(&self, request: &drtioaux::Packet) -> Result<(), drtioaux::Error<!>> {
-        self.aux_send(request)?;
-        loop {
-            let reply = self.recv_aux_timeout(200)?;
-            match reply {
-                // async/locally requested packets to be consumed or routed
-                // these may come while a packet would be forwarded
-                drtioaux::Packet::DmaPlaybackStatus { .. } |
-                drtioaux::Packet::SubkernelFinished { .. } |
-                drtioaux::Packet::SubkernelMessage  { .. } | 
-                drtioaux::Packet::SubkernelMessageAck { .. } | 
-                drtioaux::Packet::SubkernelLoadRunReply { .. } |
-                drtioaux::Packet::SubkernelException { .. } |
-                drtioaux::Packet::DmaAddTraceReply { .. } |
-                drtioaux::Packet::DmaPlaybackReply { .. } => {
-                    router.route(reply, routing_table, rank, self_destination);
-                }
-                _ => {
-                    drtioaux::send(0, &reply).unwrap();
-                    break;
-                }
-            }
-        }
-        Ok(())
     }
 
     pub fn sync_tsc(&self) -> Result<(), drtioaux::Error<!>> {

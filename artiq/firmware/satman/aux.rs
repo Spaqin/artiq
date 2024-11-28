@@ -11,7 +11,6 @@ use drtiosat_reset;
 
 type TransactionHandle = u8;
 
-pub const LINK_COOLDOWN: u64 = 5;
 pub const DEFAULT_TIMEOUT: u64 = 200;
 
 /* represents large data that has to be sent with the aux protocol */
@@ -190,9 +189,10 @@ pub struct AuxManager {
 
 impl AuxManager {
     pub fn new() -> AuxManager {
+        const OUTGOING_DEFAULT: Option<Box<OutgoingTransaction>> = None;
         AuxManager {
             incoming_transactions: BTreeMap::new(),
-            outgoing_transactions: [None; 128],
+            outgoing_transactions: [OUTGOING_DEFAULT; 128],
             routable_packets: Vec::new(),
             next_id: 0,
             self_destination: 1,
@@ -281,10 +281,10 @@ impl AuxManager {
         let upstream_state = &mut self.upstream_state;
     
         self.routable_packets.retain(|packet| {
-            match send(repeaters, current_time, None, 
+            match send(repeaters, None, 
                 &routing_table, rank, upstream_state, 
                 packet) {
-                Ok(value) => !value,
+                Ok(()) => true,
                 // repeater errors (link down) end in discarding the packet
                 Err(e) => { error!("error sending routable packet: {:?}", e); false }
             }
@@ -292,11 +292,10 @@ impl AuxManager {
         for entry in self.outgoing_transactions.iter_mut() {
             if let Some(transaction) = entry {
                 if transaction.should_send(current_time) {
-                    match send(repeaters, current_time, transaction.force_linkno, 
+                    match send(repeaters, transaction.force_linkno, 
                         &routing_table, rank, upstream_state, 
                         &transaction.packet) {
-                        Ok(true) => transaction.update(),
-                        Ok(false) => (),
+                        Ok(()) => transaction.update(),
                         Err(e) => error!("error sending outgoing transaction: {:?}", e)
                     };
                     break;
@@ -458,21 +457,21 @@ impl AuxManager {
     }
 }
 
-fn send(_repeaters: &mut [repeater::Repeater], current_time: u64, _force_linkno: Option<u8>,
+fn send(_repeaters: &mut [repeater::Repeater], _force_linkno: Option<u8>,
     routing_table: &drtio_routing::RoutingTable, rank: u8, upstream_state: &UpstreamState,
     packet: &drtioaux::Packet,
-) -> Result<bool, drtioaux::Error<!>> {
+) -> Result<(), drtioaux::Error<!>> {
     #[cfg(has_drtio_routing)]
     {
         let hop = _force_linkno.unwrap_or(routing_table.0[packet.destination as usize][rank as usize]) as usize;
         if hop > 0 && hop < csr::DRTIOREP.len() {
             let repno = (hop - 1) as usize;
-            return _repeaters[repno].aux_send(current_time, packet);
+            return _repeaters[repno].aux_send(packet);
         }
     }
     if let UpstreamState::Up = *upstream_state {
-        drtioaux::send(0, packet)?;
-        return Ok(true);
+        drtioaux::send(0, packet)
+    } else {
+        Ok(())
     }
-    Ok(false)
 }
