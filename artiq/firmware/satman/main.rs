@@ -26,8 +26,9 @@ use board_artiq::si549;
 use board_misoc::irq;
 use board_misoc::{boot, spiflash};
 use board_artiq::{spi, drtioaux, drtio_routing};
-#[cfg(soc_platform = "efc")]
+#[cfg(all(soc_platform = "efc", has_converter_spi))]
 use board_artiq::ad9117;
+#[cfg(soc_platform = "efc")]
 use proto_artiq::drtioaux_proto::{SAT_PAYLOAD_MAX_SIZE, MASTER_PAYLOAD_MAX_SIZE};
 #[cfg(has_drtio_eem)]
 use board_artiq::drtio_eem;
@@ -996,7 +997,7 @@ fn startup() {
 
     let mut hardware_tick_ts = 0;
 
-    #[cfg(soc_platform = "efc")]
+    #[cfg(all(soc_platform = "efc", has_converter_spi))]
     ad9117::init().expect("AD9117 initialization failed");
     
     loop {
