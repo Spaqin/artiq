@@ -92,6 +92,10 @@ class LTC2000DDSModule(Module, AutoCSR):
         self.ptw = Signal(18)
         self.amplitude = Signal(16)
         self.gain = Signal(16)
+        self.shift = Signal(4)
+        self.shift_counter = Signal(16) #need to count to 2**shift - 1
+        self.shift_stb = Signal()
+        self.reserved = Signal(12) # for future use
 
         self.shift = Signal(4)
         self.shift_counter = Signal(16) # Need to count to 2**shift - 1
@@ -104,6 +108,20 @@ class LTC2000DDSModule(Module, AutoCSR):
         self.reserved = Signal(12) # for future use
 
         self.i = Endpoint([("data", 240)])
+
+        self.comb += [
+            self.shift_stb.eq((self.shift == 0) |
+                             (self.shift_counter == (1 << self.shift) - 1)) # power of two for strobing
+        ]
+        self.sync += [
+            If(self.shift == 0,
+                self.shift_counter.eq(0)
+            ).Elif(self.shift_counter == (1 << self.shift) - 1,
+                self.shift_counter.eq(0)
+            ).Else(
+                self.shift_counter.eq(self.shift_counter + 1)
+            )
+        ]
 
         self.comb += [
             self.shift_stb.eq((self.shift == 0) |
