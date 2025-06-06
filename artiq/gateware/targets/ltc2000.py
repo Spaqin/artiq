@@ -8,6 +8,89 @@ from misoc.cores.duc import PhasedAccu, CosSinGen, saturate
 from collections import namedtuple
 from sumandscale import SumAndScale
 
+class CoefficientProcessor(Module):
+    def __init__(self):
+        self.ftw = Signal(32)
+        self.atw = Signal(32)
+        self.ptw = Signal(18)
+        self.amplitude = Signal(16)
+
+        self.clear = Signal()
+        self.shift = Signal(4)
+        self.shift_counter = Signal(16)
+        self.shift_stb = Signal()
+
+        self.i = Endpoint([("data", 240)])
+
+        self.z = [Signal(32) for i in range(3)]
+        self.x = [Signal(48) for i in range(4)]
+
+        self.phase_msb_word = Signal(16)
+        self.control_word = Signal(16)
+        self.reconstructed_phase = Signal(18)
+
+        ###
+
+        self.comb += [
+            self.shift_stb.eq((self.shift == 0) |
+                             (self.shift_counter == (1 << self.shift) - 1))
+        ]
+
+        self.sync += [
+            If(self.shift == 0,
+                self.shift_counter.eq(0)
+            ).Elif(self.shift_counter == (1 << self.shift) - 1,
+                self.shift_counter.eq(0)
+            ).Else(
+                self.shift_counter.eq(self.shift_counter + 1)
+            )
+        ]
+
+        self.sync += [
+            self.ftw.eq(self.z[1]),
+            self.atw.eq(self.x[0]),
+            self.ptw.eq(self.reconstructed_phase),
+
+            If(self.shift_stb,
+                self.x[0].eq(self.x[0] + self.x[1]),
+                self.x[1].eq(self.x[1] + self.x[2]),
+                self.x[2].eq(self.x[2] + self.x[3]),
+                self.z[1].eq(self.z[1] + self.z[2]),
+            ),
+
+            If(self.i.stb,
+                self.x[0].eq(0),
+                self.x[1].eq(0),
+                Cat(self.x[0][32:],           # amp offset (16 bits) - Word 0
+                    self.x[1][16:],           # damp (32 bits) - Words 1-2
+                    self.x[2],                # ddamp (48 bits) - Words 3-5
+                    self.x[3],                # dddamp (48 bits) - Words 6-8
+                    self.phase_msb_word,      # phase main (16 bits) - Word 9
+                    self.z[1],                # ftw (32 bits) - Words 10-11
+                    self.z[2],                # chirp (32 bits) - Words 12-13
+                    self.control_word,        # control word (16 bits) - Word 14
+                ).eq(self.i.payload.raw_bits()),
+                self.shift_counter.eq(0),
+            )
+        ]
+
+        self.comb += [
+            self.reconstructed_phase.eq(Cat(
+                self.control_word[4],
+                self.control_word[5],
+                self.phase_msb_word
+            )),
+
+            self.shift.eq(Cat(
+                self.control_word[0],
+                self.control_word[1],
+                self.control_word[2],
+                self.control_word[3]
+            )),
+
+            self.amplitude.eq(self.x[0][32:])
+        ]
+
 class PolyphaseDDS(Module):
     """Composite DDS with sub-DDSs synthesizing
        individual phases to increase fmax.
@@ -71,7 +154,6 @@ class DoubleDataRateDDS(Module):
             )
         ]
 
-
 class LTC2000DDSModule(Module, AutoCSR):
     """The line data is interpreted as:
 
@@ -86,11 +168,8 @@ class LTC2000DDSModule(Module, AutoCSR):
 
     def __init__(self):
         NPHASES = 12
+
         self.clear = Signal()
-        self.ftw = Signal(32)
-        self.atw = Signal(32)
-        self.ptw = Signal(18)
-        self.amplitude = Signal(16)
         self.gain = Signal(16)
 
         self.shift = Signal(4)
@@ -115,19 +194,7 @@ class LTC2000DDSModule(Module, AutoCSR):
 
         self.i = Endpoint([("data", 240)])
 
-        self.comb += [
-            self.shift_stb.eq((self.shift == 0) |
-                             (self.shift_counter == (1 << self.shift) - 1)) # power of two for strobing
-        ]
-        self.sync += [
-            If(self.shift == 0,
-                self.shift_counter.eq(0)
-            ).Elif(self.shift_counter == (1 << self.shift) - 1,
-                self.shift_counter.eq(0)
-            ).Else(
-                self.shift_counter.eq(self.shift_counter + 1)
-            )
-        ]
+        ###
 
         self.comb += [
             self.shift_stb.eq((self.shift == 0) |
@@ -176,24 +243,21 @@ class LTC2000DDSModule(Module, AutoCSR):
         ]
 
         self.comb += [
-            # Reconstruct 18-bit phase with extension bits in correct position
-            reconstructed_phase.eq(Cat(
-                control_word[5:4],              # Phase extension bits [5:4] become LSBs [1:0]
-                phase_msb_word                  # Main phase bits become MSBs [17:2]
-            )),
-
-            self.shift.eq(control_word[3:0]),   # Shift value in bits [3:0]
-
-            self.amplitude.eq(x[0][32:])
+            self.coeff_proc.clear.eq(self.clear),
+            self.coeff_proc.i.connect(self.i)
         ]
+
+        self.ftw = self.coeff_proc.ftw
+        self.atw = self.coeff_proc.atw
+        self.ptw = self.coeff_proc.ptw
+        self.amplitude = self.coeff_proc.amplitude
 
         self.submodules.dds = DoubleDataRateDDS(NPHASES, 32, 18) # 12 phases at 200 MHz => 2400 MSPS, output updated at 100 MHz
         self.comb += [
-            self.dds.ftw.eq(self.ftw),
-            self.dds.ptw.eq(self.ptw),
+            self.dds.ftw.eq(self.coeff_proc.ftw),
+            self.dds.ptw.eq(self.coeff_proc.ptw),
             self.dds.clr.eq(self.clear)
         ]
-
 
 class LTC2000DataSynth(Module, AutoCSR):
     def __init__(self, NUM_OF_DDS, NPHASES):
@@ -326,91 +390,24 @@ class LTC2000DDSModuleTest(Module):
     """We're ONLY tests coefficient processing - no DDS"""
 
     def __init__(self):
-        self.clear = Signal()
-        self.ftw = Signal(32)
-        self.atw = Signal(32)
-        self.ptw = Signal(18)
-        self.amplitude = Signal(16)
+        self.submodules.coeff_proc = CoefficientProcessor()
+
+        self.clear = self.coeff_proc.clear
+        self.ftw = self.coeff_proc.ftw
+        self.atw = self.coeff_proc.atw
+        self.ptw = self.coeff_proc.ptw
+        self.amplitude = self.coeff_proc.amplitude
         self.gain = Signal(16)
-        self.shift = Signal(4)
-        self.shift_counter = Signal(16)
-        self.shift_stb = Signal()
-        self.reserved = Signal(12)
+        self.shift = self.coeff_proc.shift
+        self.shift_counter = self.coeff_proc.shift_counter
+        self.shift_stb = self.coeff_proc.shift_stb
+        self.i = self.coeff_proc.i
 
-        phase_msb_word = Signal(16)      # Upper 16 bits of 18-bit phase value
-        control_word = Signal(16)        # Packed: shift[3:0] + phase_lsb[5:4] + reserved[15:6]
-        reconstructed_phase = Signal(18)  # The full 18-bit phase value
-
-        self.i = Endpoint([("data", 240)])
-
-        self.comb += [
-            self.shift_stb.eq((self.shift == 0) |
-                             (self.shift_counter == (1 << self.shift) - 1))
-        ]
-        self.sync += [
-            If(self.shift == 0,
-                self.shift_counter.eq(0)
-            ).Elif(self.shift_counter == (1 << self.shift) - 1,
-                self.shift_counter.eq(0)
-            ).Else(
-                self.shift_counter.eq(self.shift_counter + 1)
-            )
-        ]
-
-        z = [Signal(32) for i in range(3)]  # phase, dphase, ddphase
-        x = [Signal(48) for i in range(4)]  # amp, damp, ddamp, dddamp
-
-        self.z = z
-        self.x = x
-
-        self.phase_msb_word = phase_msb_word
-        self.control_word = control_word
-        self.reconstructed_phase = reconstructed_phase
-
-        self.sync += [
-            self.ftw.eq(z[1]),
-            self.atw.eq(x[0]),
-            self.ptw.eq(reconstructed_phase),
-
-            If(self.shift_stb,
-                x[0].eq(x[0] + x[1]),
-                x[1].eq(x[1] + x[2]),
-                x[2].eq(x[2] + x[3]),
-                z[1].eq(z[1] + z[2]),
-            ),
-
-            If(self.i.stb,
-                x[0].eq(0),
-                x[1].eq(0),
-                Cat(x[0][32:],           # amp offset (16 bits) - Word 0
-                    x[1][16:],           # damp (32 bits) - Words 1-2
-                    x[2],                # ddamp (48 bits) - Words 3-5
-                    x[3],                # dddamp (48 bits) - Words 6-8
-                    phase_msb_word,      # phase main (16 bits) - Word 9
-                    z[1],                # ftw (32 bits) - Words 10-11
-                    z[2],                # chirp (32 bits) - Words 12-13
-                    control_word,        # control word (16 bits) - Word 14
-                ).eq(self.i.payload.raw_bits()),
-                self.shift_counter.eq(0),
-            )
-        ]
-
-        self.comb += [
-            reconstructed_phase.eq(Cat(
-                control_word[4],
-                control_word[5],
-                phase_msb_word
-            )),
-
-            self.shift.eq(Cat(
-                control_word[0],
-                control_word[1],
-                control_word[2],
-                control_word[3]
-            )),
-
-            self.amplitude.eq(x[0][32:])
-        ]
+        self.z = self.coeff_proc.z
+        self.x = self.coeff_proc.x
+        self.phase_msb_word = self.coeff_proc.phase_msb_word
+        self.control_word = self.coeff_proc.control_word
+        self.reconstructed_phase = self.coeff_proc.reconstructed_phase
 
 class TestConfiguration:
     """Class to handle test configuration loading"""
@@ -454,7 +451,7 @@ class TestConfiguration:
             (self.coefficients['damp'] << 16) |                 # bits [47:16] (32 bits)
             (self.coefficients['ddamp'] << 48) |                # bits [95:48] (48 bits)
             (self.coefficients['dddamp'] << 96) |               # bits [143:96] (48 bits)
-            (phase_msb << 144) |                               # bits [159:144] (16 bits)
+            (phase_msb << 144) |                                # bits [159:144] (16 bits)
             (self.coefficients['ftw'] << 160) |                 # bits [191:160] (32 bits)
             (self.coefficients['chirp'] << 192) |               # bits [223:192] (32 bits)
             (self.shift << 224) |                               # bits [227:224] (4 bits)
