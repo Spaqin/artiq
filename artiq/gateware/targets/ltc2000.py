@@ -92,9 +92,15 @@ class LTC2000DDSModule(Module, AutoCSR):
         self.ptw = Signal(18)
         self.amplitude = Signal(16)
         self.gain = Signal(16)
+
         self.shift = Signal(4)
-        self.shift_counter = Signal(16) #need to count to 2**shift - 1
+        self.shift_counter = Signal(16) # Need to count to 2**shift - 1
         self.shift_stb = Signal()
+
+        phase_msb_word = Signal(16)      # Upper 16 bits of 18-bit phase value
+        control_word = Signal(16)        # Packed: shift[3:0] + phase_lsb[5:4] + reserved[15:6]
+        reconstructed_phase = Signal(18)
+
         self.reserved = Signal(12) # for future use
 
         self.shift = Signal(4)
