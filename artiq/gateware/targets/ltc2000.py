@@ -6,7 +6,7 @@ from artiq.gateware.ltc2000phy import Ltc2000phy
 from artiq.gateware.rtio import rtlink
 from misoc.cores.duc import PhasedAccu, CosSinGen, saturate
 from collections import namedtuple
-from sumandscale import SumAndScale
+from .sumandscale import SumAndScale
 
 class CoefficientProcessor(Module):
     def __init__(self):
