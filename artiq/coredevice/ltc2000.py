@@ -5,28 +5,16 @@ from artiq.language.core import kernel, delay
 from artiq.language.units import us
 
 class DDS:
-    """Shuttler Core DDS spline.
+    """LTC2000 DDS with polynomial control of amplitude and frequency.
 
-    A Shuttler channel can generate a waveform `w(t)` that is the sum of a
-    cubic spline `a(t)` and a sinusoid modulated in amplitude by a cubic
-    spline `b(t)` and in phase/frequency by a quadratic spline `c(t)`, where
+    This driver controls a DDS core that can generate signals with polynomially-varying
+    amplitude and frequency. This is useful for creating complex pulse shapes and
+    chirps.
 
-    .. math::
-        w(t) = a(t) + b(t) * cos(c(t))
+    The amplitude is controlled by a cubic spline, and the phase/frequency by a
+    quadratic spline.
 
-    and `t` corresponds to time in seconds.
-    This class controls the cubic spline `b(t)` and quadratic spline `c(t)`,
-    in which
-
-    .. math::
-        b(t) &= g * (q_0 + q_1t + \\frac{q_2t^2}{2} + \\frac{q_3t^3}{6})
-
-        c(t) &= r_0 + r_1t + \\frac{r_2t^2}{2}
-
-    `b(t)` is in volts, `c(t)` is in number of turns. Note that `b(t)`
-    contributes to a constant gain of :math:`g=1.64676`.
-
-    :param channel: RTIO channel number of this DC-bias spline interface.
+    :param channel: RTIO channel number of this DDS interface.
     :param core_device: Core device name.
     """
     kernel_invariants = {"core", "channel", "target_o"}
@@ -39,54 +27,31 @@ class DDS:
     @kernel
     def set_waveform(self, b0: TInt32, b1: TInt32, b2: TInt64, b3: TInt64,
             c0: TInt32, c1: TInt32, c2: TInt32, shift: TInt32 = 0):
-        """Set the DDS spline waveform.
+        """Set the DDS polynomial coefficients and update rate.
 
-        The shift parameter controls the spline update rate:
-        - shift = 0: normal rate (no division)
-        - shift = 1: half rate (2x longer duration)
-        - shift = 2: quarter rate (4x longer duration)
-        - ...
-        - shift = 15: 1/32768 rate (32768x longer duration)
+        The amplitude and frequency evolve over time. The hardware implements this
+        using a forward difference method for polynomial evaluation. The parameters
+        correspond to the initial values of the state registers.
 
-        Given `b(t)` and `c(t)` as defined in :class:`DDS`, the coefficients
-        should be configured by the following formulae.
+        The `shift` parameter controls the update rate of the polynomial evaluation.
+        The update period is `(1 << shift)` system clock cycles. This allows the same
+        coefficient set to generate waveforms with vastly different time scales.
 
-        .. math::
-            T &= 8*10^{-9}
+        The waveform is not updated to the DDS core until triggered.
+        See :class:`Trigger` for the update triggering mechanism.
 
-            b_0 &= q_0
-
-            b_1 &= q_1T + \\frac{q_2T^2}{2} + \\frac{q_3T^3}{6}
-
-            b_2 &= q_2T^2 + q_3T^3
-
-            b_3 &= q_3T^3
-
-            c_0 &= r_0
-
-            c_1 &= r_1T + \\frac{r_2T^2}{2}
-
-            c_2 &= r_2T^2
-
-        :math:`b_0`, :math:`b_1`, :math:`b_2` and :math:`b_3` are 16, 32, 48
-        and 48 bits in width respectively. See :meth:`shuttler_volt_to_mu` for
-        machine unit conversion. :math:`c_0`, :math:`c_1` and :math:`c_2` are
-        16, 32 and 32 bits in width respectively.
-
-        Note: The waveform is not updated to the Shuttler Core until
-        triggered. See :class:`Trigger` for the update triggering mechanism.
-
-        :param b0: The :math:`b_0` coefficient in machine units.
-        :param b1: The :math:`b_1` coefficient in machine units.
-        :param b2: The :math:`b_2` coefficient in machine units.
-        :param b3: The :math:`b_3` coefficient in machine units.
-        :param c0: The :math:`c_0` coefficient in machine units.
-        :param c1: The :math:`c_1` coefficient in machine units.
-        :param c2: The :math:`c_2` coefficient in machine units.
-        :param shift: Clock division factor (0-15). Defaults to 0 (no division).
+        :param b0: Initial amplitude (16-bit).
+        :param b1: Initial amplitude slope (1st derivative, 32-bit).
+        :param b2: Initial amplitude 2nd derivative (48-bit).
+        :param b3: Initial amplitude 3rd derivative (48-bit).
+        :param c0: Phase offset (18-bit).
+        :param c1: Initial frequency tuning word (FTW) (32-bit).
+        :param c2: Frequency chirp rate (32-bit).
+        :param shift: Update rate divider (0-15). An update occurs every
+            ``2**shift`` clock cycles. Defaults to 0 (update every cycle).
         """
 
-        if shift < 0 or shift > 15:
+        if not 0 <= shift <= 15:
             raise ValueError("Shift must be between 0 and 15")
 
         phase_msb = (c0 >> 2) & 0xFFFF   # Upper 16 bits of 18-bit phase value
@@ -118,7 +83,7 @@ class DDS:
 
 
 class Trigger:
-    """Shuttler Core spline coefficients update trigger.
+    """LTC2000 DDS coefficient update trigger.
 
     :param channel: RTIO channel number of the trigger interface.
     :param core_device: Core device name.
@@ -132,20 +97,18 @@ class Trigger:
 
     @kernel
     def trigger(self, trig_out):
-        """Triggers coefficient update of (a) Shuttler Core channel(s).
+        """Triggers coefficient update of LTC2000 DDS channel(s).
 
-        Each bit corresponds to a Shuttler waveform generator core. Setting
-        ``trig_out`` bits commits the pending coefficient update (from
-        ``set_waveform`` in :class:`DCBias` and :class:`DDS`) to the Shuttler Core
-        synchronously.
+        Each bit of `trig_out` corresponds to a DDS core. Setting a bit
+        commits the pending coefficient update (from :meth:`DDS.set_waveform`)
+        to the corresponding DDS core synchronously.
 
-        :param trig_out: Coefficient update trigger bits. The MSB corresponds
-            to Channel 15, LSB corresponds to Channel 0.
+        :param trig_out: Coefficient update trigger bits.
         """
         rtio_output(self.target_o, trig_out)
 
 class Clear:
-    """Shuttler Core clear signal.
+    """LTC2000 DDS clear signal.
 
     :param channel: RTIO channel number of the clear interface.
     :param core_device: Core device name.
@@ -159,21 +122,19 @@ class Clear:
 
     @kernel
     def clear(self, clear_out):
-        """Clears the Shuttler Core channel(s).
+        """Clears the LTC2000 DDS channel(s).
 
-        Each bit corresponds to a Shuttler waveform generator core. Setting
-        ``clear_out`` bits clears the corresponding channels in the Shuttler Core
-        synchronously.
+        Each bit of `clear_out` corresponds to a DDS core. Setting a bit
+        clears the internal state of the corresponding DDS core synchronously.
 
-        :param clear_out: Clear signal bits. The MSB corresponds
-            to Channel 15, LSB corresponds to Channel 0.
+        :param clear_out: Clear signal bits.
         """
         rtio_output(self.target_o, clear_out)
 
 class Reset:
-    """Shuttler Core reset signal.
+    """LTC2000 DAC reset signal.
 
-    :param channel: RTIO channel number of the clear interface.
+    :param channel: RTIO channel number of the reset interface.
     :param core_device: Core device name.
     """
     kernel_invariants = {"core", "channel", "target_o"}
