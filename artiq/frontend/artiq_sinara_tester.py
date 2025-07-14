@@ -466,9 +466,9 @@ class SinaraTester(EnvExperiment):
                 print("{}\t{}MHz".format(channel_name, frequency*2))
                 self.setup_mirny(channel_dev, frequency)
         print("RF ON, attenuators are tested. Press ENTER when done.")
-        self.almazny_att_test([ch for _, ch in self.almaznys.items()])
+        self.almazny_att_test([ch for _, ch in self.new_almaznys.items()])
         print("RF OFF, testing LEDs. Press ENTER when done.")
-        self.almazny_led_wave([ch for _, ch in self.almaznys.items()])
+        self.almazny_led_wave([ch for _, ch in self.new_almaznys.items()])
 
     def test_mirnies(self):
         print("*** Testing Mirny PLLs.")
