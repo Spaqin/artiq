@@ -60,6 +60,7 @@ class SinaraTester(EnvExperiment):
         self.suservos = dict()
         self.suschannels = dict()
         self.almaznys = dict()
+        self.new_almaznys = dict()
 
         ddb = self.get_device_db()
         for name, desc in ddb.items():
