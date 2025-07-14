@@ -360,7 +360,8 @@ class PeripheralManager:
                         "channel": {i}
                     }},
                 }}""",
-                name=mirny_name)
+                name=mirny_name,
+                i=i)
 
         return next(channel)
 
